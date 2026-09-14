@@ -1,0 +1,346 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-title" content="定位自检">
+<meta name="theme-color" content="#ffffff">
+<title>定位自检</title>
+<style>
+  :root { --ink:#1c1c22; --dim:#6b6b78; --line:#dcdce4; --ok:#1e8e5a; --warn:#b8730a; --bad:#c0304f; }
+  * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+  body { margin:0; padding: calc(env(safe-area-inset-top) + 12px) calc(env(safe-area-inset-right) + 16px)
+                    calc(env(safe-area-inset-bottom) + 12px) calc(env(safe-area-inset-left) + 16px);
+         background:#fff; color:var(--ink);
+         font:16px/1.5 -apple-system, "PingFang SC", "Microsoft YaHei", sans-serif;
+         -webkit-text-size-adjust:100%; }
+  h1 { font-size:15px; margin:0 0 10px; color:var(--dim); font-weight:600; letter-spacing:.02em; }
+
+  .acc { font-size:64px; font-weight:700; line-height:1; font-variant-numeric:tabular-nums;
+         letter-spacing:-.02em; }
+  .acc small { font-size:20px; font-weight:600; margin-left:4px; }
+  .acc.stale { color:#b6b6c0; }
+  .coords { font-size:20px; font-variant-numeric:tabular-nums; margin-top:8px; letter-spacing:.01em; }
+  .meta { font-size:14px; color:var(--dim); margin-top:4px; font-variant-numeric:tabular-nums; }
+  .note { font-size:13px; color:var(--warn); margin-top:6px; min-height:19px; }
+
+  .bar { display:flex; gap:10px; margin:16px 0 6px; }
+  button { flex:1; padding:18px 12px; font-size:17px; font-weight:600; border:0; border-radius:12px;
+           background:#1c1c22; color:#fff; font-family:inherit; }
+  button.ghost { background:#eef0f4; color:#1c1c22; }
+  button:disabled { opacity:.35; }
+
+  section { margin-top:22px; border-top:1px solid var(--line); padding-top:12px; }
+  .card { font-size:15px; }
+  .line { display:flex; justify-content:space-between; gap:12px; padding:5px 0;
+          font-variant-numeric:tabular-nums; }
+  .line .n { color:var(--dim); overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  .line .v { font-weight:600; white-space:nowrap; }
+
+  table { width:100%; border-collapse:collapse; font-size:13px; font-variant-numeric:tabular-nums; }
+  th, td { text-align:right; padding:5px 4px; border-bottom:1px solid var(--line); }
+  th:first-child, td:first-child { text-align:left; }
+  th { color:var(--dim); font-weight:500; }
+  .scroll { overflow-x:auto; -webkit-overflow-scrolling:touch; }
+
+  textarea { width:100%; font:13px/1.6 ui-monospace, Menlo, monospace; padding:8px;
+             border:1px solid var(--line); border-radius:8px; resize:vertical; }
+  pre { font-size:12px; line-height:1.5; color:var(--dim); white-space:pre-wrap; word-break:break-all;
+        background:#f7f7fa; padding:10px; border-radius:8px; }
+  details > summary { font-size:14px; color:var(--dim); cursor:pointer; padding:4px 0; }
+  .ok { color:var(--ok); } .warn { color:var(--warn); } .bad { color:var(--bad); }
+</style>
+</head>
+<body>
+
+<h1>定位自检 · 迪士尼公主寻宝</h1>
+
+<div class="acc" id="acc">—</div>
+<div class="coords" id="coords">等待定位…</div>
+<div class="meta" id="meta">更新时间 —</div>
+<div class="note" id="note"></div>
+
+<div class="bar">
+  <button id="start">开始定位</button>
+  <button id="record" class="ghost" disabled>记录本次</button>
+</div>
+
+<section>
+  <h1>到候选点的距离</h1>
+  <div class="card" id="dists"><div class="line"><span class="n">先在下面填候选点</span></div></div>
+</section>
+
+<section>
+  <h1>样本 <span id="n">0</span> 条 · <span id="stats"></span></h1>
+  <div class="bar" style="margin:8px 0">
+    <button id="copy" class="ghost">复制全部结果</button>
+    <button id="clear" class="ghost">清空</button>
+  </div>
+  <div class="scroll">
+    <table id="table" hidden>
+      <thead><tr><th>#</th><th>时间</th><th>精度</th><th>纬度</th><th>经度</th><th>原始值</th></tr></thead>
+      <tbody></tbody>
+    </table>
+  </div>
+  <pre id="out" hidden></pre>
+</section>
+
+<section>
+  <details>
+    <summary>候选点（一行一个：名称,纬度,经度）</summary>
+    <p style="font-size:13px;color:var(--dim);margin:8px 0">
+      到场后站在真正要藏礼物的位置，把这里的坐标改成你脚下那个点，再看「到候选点的距离」——
+      那个数字就是这台 iPad 的定位误差。
+    </p>
+    <textarea id="cand" rows="4" spellcheck="false"></textarea>
+  </details>
+</section>
+
+<section>
+  <details>
+    <summary>诊断信息</summary>
+    <div class="card" style="margin-top:8px">
+      <div class="line"><span class="n">protocol</span><span class="v" id="d-proto">—</span></div>
+      <div class="line"><span class="n">isSecureContext</span><span class="v" id="d-secure">—</span></div>
+      <div class="line"><span class="n">geolocation</span><span class="v" id="d-geo">—</span></div>
+      <div class="line"><span class="n">权限</span><span class="v" id="d-perm">—</span></div>
+      <div class="line"><span class="n">错误</span><span class="v bad" id="d-err">—</span></div>
+      <div class="line"><span class="n">收到定位次数</span><span class="v" id="d-count">0</span></div>
+    </div>
+    <pre id="d-ua"></pre>
+  </details>
+</section>
+
+<script>
+const $ = (id) => document.getElementById(id);
+const R = 6371000, RAD = Math.PI / 180;
+
+function dist(la1, lo1, la2, lo2) {
+  const dla = (la2 - la1) * RAD, dlo = (lo2 - lo1) * RAD;
+  const a = Math.sin(dla / 2) ** 2 + Math.cos(la1 * RAD) * Math.cos(la2 * RAD) * Math.sin(dlo / 2) ** 2;
+  return 2 * R * Math.asin(Math.sqrt(a));
+}
+
+const STALE_S = 30;          // 超过这么久没新定位就算过期，读数灰掉
+let last = null;             // { lat, lon, acc, t }
+let samples = [];            // { t, lat, lon, acc }
+let fixes = 0;
+let watchId = null;
+
+/* ---------- 候选点 ---------- */
+const DEFAULT_CAND = [
+  "龙湖时代天街,30.754618,103.920084",
+  "成都合院,30.746403,103.918538",
+  "电子科技大学主楼,30.749073,103.925117",
+].join("\n");
+
+function parseCand() {
+  return $("cand").value.split("\n").map((line) => {
+    const p = line.split(",");
+    if (p.length < 3) return null;
+    const lat = parseFloat(p[1]), lon = parseFloat(p[2]);
+    if (!isFinite(lat) || !isFinite(lon)) return null;
+    return { name: p[0].trim() || "未命名", lat, lon };
+  }).filter(Boolean);
+}
+
+/* 精度分档：跟玩法方案里定半径用的是同一条线，先在这里看一眼现场落在哪一档 */
+function band(acc) {
+  if (acc <= 50) return ["可当半道闸门（半径约 150 米）", "ok"];
+  if (acc <= 200) return ["只能提示「到了这一片」，解锁交给拍照", "warn"];
+  return ["太粗，只驱动雷达氛围", "bad"];
+}
+
+/* ---------- 渲染 ---------- */
+function render() {
+  if (!last) return;
+  const age = (Date.now() - last.t) / 1000;
+  const stale = age > STALE_S;
+
+  $("acc").textContent = "±" + Math.round(last.acc);
+  const unit = document.createElement("small");
+  unit.textContent = "米";
+  $("acc").appendChild(unit);
+  $("acc").className = "acc" + (stale ? " stale" : "");
+
+  $("coords").textContent = last.lat.toFixed(6) + ", " + last.lon.toFixed(6);
+  $("meta").textContent = "更新时间 " + new Date(last.t).toLocaleTimeString()
+                        + "　（" + (stale ? "已过期 " + Math.round(age) + " 秒" : Math.round(age) + " 秒前") + "）";
+
+  if (stale) {
+    $("note").textContent = "读数是旧的——iPad 的 WiFi 定位会隔一阵才更新一次，站着别动，等数字跳。";
+    $("note").className = "note";
+  } else {
+    $("note").textContent = last.bandText;
+    $("note").className = "note " + last.bandCls;
+  }
+
+  const cand = parseCand();
+  $("dists").innerHTML = cand.length ? "" : '<div class="line"><span class="n">先在下面填候选点</span></div>';
+  for (const c of cand) {
+    const d = dist(last.lat, last.lon, c.lat, c.lon);
+    const row = document.createElement("div");
+    row.className = "line";
+    row.innerHTML = '<span class="n"></span><span class="v"></span>';
+    row.querySelector(".n").textContent = c.name;
+    row.querySelector(".v").textContent = (d < 1000 ? Math.round(d) + " 米" : (d / 1000).toFixed(2) + " 公里")
+      + (d <= last.acc ? "（在精度范围内）" : "");
+    $("dists").appendChild(row);
+  }
+
+  $("record").disabled = stale;
+}
+
+function renderSamples() {
+  $("n").textContent = samples.length;
+
+  let mx = 0;
+  for (let i = 0; i < samples.length; i++)
+    for (let j = i + 1; j < samples.length; j++)
+      mx = Math.max(mx, dist(samples[i].lat, samples[i].lon, samples[j].lat, samples[j].lon));
+
+  if (samples.length >= 2) {
+    const avg = samples.reduce((s, x) => s + x.acc, 0) / samples.length;
+    $("stats").textContent = "平均 ±" + Math.round(avg) + " 米 · 样本间最大跳动 " + Math.round(mx) + " 米";
+  } else {
+    $("stats").textContent = "";
+  }
+
+  const tb = $("table").querySelector("tbody");
+  tb.innerHTML = "";
+  $("table").hidden = samples.length === 0;
+  samples.forEach((s, i) => {
+    const tr = document.createElement("tr");
+    for (const v of [i + 1, new Date(s.t).toLocaleTimeString(), Math.round(s.acc), s.lat.toFixed(6), s.lon.toFixed(6), s.raw]) {
+      const td = document.createElement("td");
+      td.textContent = v;
+      tr.appendChild(td);
+    }
+    tb.appendChild(tr);
+  });
+}
+
+function report() {
+  const cand = parseCand();
+  const lines = [
+    "定位自检报告  " + new Date().toLocaleString(),
+    "设备 " + navigator.userAgent,
+    "样本 " + samples.length + " 条",
+    "",
+    "#  时间         精度   纬度          经度          到候选点",
+  ];
+  samples.forEach((s, i) => {
+    const ds = cand.map((c) => c.name + " " + Math.round(dist(s.lat, s.lon, c.lat, c.lon)) + "m").join(" / ");
+    lines.push(String(i + 1).padEnd(3) + " " + new Date(s.t).toLocaleTimeString().padEnd(12)
+      + ("±" + Math.round(s.acc)).padEnd(7) + s.lat.toFixed(6) + "   " + s.lon.toFixed(6) + "   " + ds);
+  });
+
+  if (samples.length >= 2) {
+    const avg = samples.reduce((s, x) => s + x.acc, 0) / samples.length;
+    let mx = 0;
+    for (let i = 0; i < samples.length; i++)
+      for (let j = i + 1; j < samples.length; j++)
+        mx = Math.max(mx, dist(samples[i].lat, samples[i].lon, samples[j].lat, samples[j].lon));
+    lines.push("", "平均上报精度 ±" + Math.round(avg) + " 米；站着不动时坐标最大跳动 " + Math.round(mx) + " 米");
+  }
+  return lines.join("\n");
+}
+
+/* ---------- 定位 ---------- */
+const ERR = {
+  1: "权限被拒绝（code 1）",
+  2: "位置不可用（code 2）——拿不到系统定位源",
+  3: "超时（code 3）——25 秒没有返回",
+};
+
+function onPosition(p) {
+  fixes += 1;
+  $("d-count").textContent = fixes;
+  $("d-err").textContent = "—";
+  $("d-err").className = "v";
+
+  const { latitude, longitude, accuracy } = p.coords;
+  const [bandText, bandCls] = band(accuracy);
+  last = { lat: latitude, lon: longitude, acc: accuracy, t: p.timestamp || Date.now(), bandText, bandCls };
+  render();
+}
+
+function onError(e) {
+  $("d-err").textContent = ERR[e.code] || (e.code + " " + e.message);
+  $("d-err").className = "v bad";
+  $("coords").textContent = "拿不到位置";
+  $("record").disabled = true;
+}
+
+function start() {
+  if (!("geolocation" in navigator)) return;
+  if (watchId !== null) navigator.geolocation.clearWatch(watchId);
+  $("coords").textContent = "定位中…";
+  watchId = navigator.geolocation.watchPosition(onPosition, onError, {
+    enableHighAccuracy: true, maximumAge: 0, timeout: 25000,
+  });
+}
+
+/* ---------- 绑定 ---------- */
+$("start").addEventListener("click", () => {
+  start();
+  $("start").textContent = "重新定位";
+});
+
+$("record").addEventListener("click", () => {
+  if (!last) return;
+  samples.push({ ...last, raw: $("acc").textContent });
+  renderSamples();
+});
+
+$("clear").addEventListener("click", () => {
+  samples = [];
+  $("out").hidden = true;
+  renderSamples();
+});
+
+$("copy").addEventListener("click", async () => {
+  const text = report();
+  $("out").textContent = text;
+  $("out").hidden = false;
+  try {
+    await navigator.clipboard.writeText(text);
+    $("copy").textContent = "已复制 ✓";
+    setTimeout(() => { $("copy").textContent = "复制全部结果"; }, 1600);
+  } catch {
+    $("copy").textContent = "复制失败，手动选下面的文字";
+  }
+});
+
+$("cand").addEventListener("input", () => {
+  try { localStorage.setItem("p41.cand", $("cand").value); } catch {}
+  render();
+});
+
+$("cand").value = (() => { try { return localStorage.getItem("p41.cand") || DEFAULT_CAND; } catch { return DEFAULT_CAND; } })();
+
+$("d-proto").textContent = location.protocol;
+const secure = window.isSecureContext;
+$("d-secure").textContent = secure ? "是 ✓" : "否 ✗（浏览器会禁用定位）";
+$("d-secure").className = "v " + (secure ? "ok" : "bad");
+const hasGeo = "geolocation" in navigator;
+$("d-geo").textContent = hasGeo ? "是 ✓" : "否 ✗";
+$("d-geo").className = "v " + (hasGeo ? "ok" : "bad");
+$("d-ua").textContent = navigator.userAgent;
+
+if (navigator.permissions && navigator.permissions.query) {
+  navigator.permissions.query({ name: "geolocation" }).then((s) => {
+    $("d-perm").textContent = s.state;
+    s.onchange = () => { $("d-perm").textContent = s.state; };
+  }).catch((e) => { $("d-perm").textContent = "查询失败：" + e.message; });
+} else {
+  $("d-perm").textContent = "此浏览器不支持查询";
+}
+
+setInterval(render, 1000);
+render();
+start();
+</script>
+</body>
+</html>
