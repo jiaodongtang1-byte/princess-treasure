@@ -46,6 +46,8 @@
 
   textarea { width:100%; font:13px/1.6 ui-monospace, Menlo, monospace; padding:8px;
              border:1px solid var(--line); border-radius:8px; resize:vertical; }
+  #cam-video, #cam-still { width:100%; border-radius:10px; background:#000; display:block; }
+  #cam-video[hidden], #cam-still[hidden] { display:none; }
   pre { font-size:12px; line-height:1.5; color:var(--dim); white-space:pre-wrap; word-break:break-all;
         background:#f7f7fa; padding:10px; border-radius:8px; }
   details > summary { font-size:14px; color:var(--dim); cursor:pointer; padding:4px 0; }
@@ -84,6 +86,18 @@
     </table>
   </div>
   <pre id="out" hidden></pre>
+</section>
+
+<section>
+  <h1>摄像头预演</h1>
+  <div class="bar" style="margin:8px 0">
+    <button id="cam-start" class="ghost">试开摄像头</button>
+    <button id="cam-switch" class="ghost" disabled>切前/后</button>
+    <button id="cam-shot" class="ghost" disabled>拍一张</button>
+  </div>
+  <video id="cam-video" playsinline muted autoplay></video>
+  <img id="cam-still" alt="拍下来的样子" hidden>
+  <div class="card" id="cam-info"></div>
 </section>
 
 <section>
@@ -337,6 +351,70 @@ if (navigator.permissions && navigator.permissions.query) {
 } else {
   $("d-perm").textContent = "此浏览器不支持查询";
 }
+
+/* ---------- 摄像头预演 ---------- */
+let camStream = null, camFacing = "user";
+
+function camLine(label, value) {
+  const row = document.createElement("div");
+  row.className = "line";
+  row.innerHTML = '<span class="n"></span><span class="v"></span>';
+  row.querySelector(".n").textContent = label;
+  row.querySelector(".v").textContent = value;
+  $("cam-info").appendChild(row);
+}
+
+async function camStart() {
+  if (camStream) { camStream.getTracks().forEach((t) => t.stop()); camStream = null; }
+  $("cam-info").innerHTML = "";
+  try {
+    camStream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: camFacing }, audio: false });
+  } catch (e) {
+    camLine("打不开", e.name + "：" + e.message);
+    $("cam-switch").disabled = true;
+    $("cam-shot").disabled = true;
+    return;
+  }
+  const v = $("cam-video");
+  v.srcObject = camStream;
+  v.hidden = false;
+  $("cam-still").hidden = true;
+  await v.play().catch(() => {});
+
+  const s = camStream.getVideoTracks()[0].getSettings();
+  camLine("拿到视频流", "是 ✓");
+  camLine("当前朝向", s.facingMode || (camFacing + "（设备没报，这是请求值）"));
+  camLine("分辨率", s.width + " × " + s.height);
+  camLine("画面比例", (s.width / s.height).toFixed(2) + (s.width > s.height ? "（横）" : "（竖）"));
+
+  const cams = (await navigator.mediaDevices.enumerateDevices()).filter((d) => d.kind === "videoinput");
+  camLine("摄像头个数", String(cams.length));
+  cams.forEach((c, i) => camLine("  #" + (i + 1), c.label || "(授权前拿不到名字)"));
+
+  camLine("预览是原始画面", "未做镜像。前摄自拍时文字会是反的——");
+  camLine("", "这是正常的，应用里会镜像显示。拍一张看看实际存下来什么样。");
+
+  $("cam-switch").disabled = false;
+  $("cam-shot").disabled = false;
+}
+
+$("cam-start").addEventListener("click", camStart);
+$("cam-switch").addEventListener("click", () => {
+  camFacing = camFacing === "user" ? "environment" : "user";
+  camStart();
+});
+$("cam-shot").addEventListener("click", () => {
+  const v = $("cam-video");
+  if (!v.videoWidth) return;
+  const c = document.createElement("canvas");
+  c.width = v.videoWidth;
+  c.height = v.videoHeight;
+  c.getContext("2d").drawImage(v, 0, 0);
+  const img = $("cam-still");
+  img.src = c.toDataURL("image/jpeg", 0.85);
+  img.hidden = false;
+  camLine("拍下来的尺寸", c.width + " × " + c.height);
+});
 
 setInterval(render, 1000);
 render();
