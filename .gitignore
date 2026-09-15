@@ -1,6 +1,27 @@
-# 仓库是公开的：只放要发布的站点文件，其余一律不入库。
-# 新增发布文件时记得在下面加一行 !文件名。
-*
-!.gitignore
-!.nojekyll
-!geo-test.html
+# 仓库是公开的、而且推送即发布。下图是「要发布的东西」，其余都是内部工作文件。
+# 黑名单而不是白名单：应用有十来个文件，白名单早晚会漏。
+
+# 内部文档与设计稿
+*.md
+mockup.template.html
+20260914-视觉方向-V1.html
+
+# 生成脚本
+build-mockup.py
+fetch-osm.py
+make-icons.py
+make-cards.py
+
+# 测试与截图
+shot.mjs
+*.spec.mjs
+walkthrough.mjs
+radar-test.mjs
+decode-test.mjs
+probe-*.mjs
+app-*.png
+scr-*.png
+shot-*.png
+
+# 卡片是给你拿去打印的，不是网站的一部分；而且码的内容本来就在 story.js 里
+cards/

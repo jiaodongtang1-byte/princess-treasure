@@ -1,0 +1,119 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, user-scalable=no">
+<title>公主的寻宝书</title>
+
+<!-- 装到主屏后全屏跑 -->
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="default">
+<meta name="apple-mobile-web-app-title" content="寻宝书">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="theme-color" content="#FFFBF4">
+<link rel="apple-touch-icon" href="icons/icon-180.png">
+<link rel="icon" href="icons/icon-192.png">
+<link rel="manifest" href="manifest.webmanifest">
+
+<link rel="stylesheet" href="app.css">
+</head>
+<body>
+
+<!-- 封面 -->
+<section class="screen" id="s-cover">
+  <div class="cover-em" id="cover-em"></div>
+  <div class="kicker" id="cover-k"></div>
+  <h1 class="cover-t" id="cover-t"></h1>
+  <div class="cover-s" id="cover-s"></div>
+  <button class="gbtn" id="cover-btn"></button>
+  <div class="foot" id="cover-fl"></div>
+</section>
+
+<!-- 线索页 -->
+<section class="screen" id="s-clue">
+  <div class="stack">
+    <div class="em-lg" id="clue-em"></div>
+    <div class="kicker" id="clue-k"></div>
+    <h1 class="clue-t" id="clue-t"></h1>
+    <div class="rule" id="clue-rule"></div>
+    <p class="body" id="clue-d"></p>
+    <button class="gbtn" id="clue-btn"></button>
+  </div>
+</section>
+
+<!-- 地图 / 雷达 -->
+<section class="screen" id="s-map">
+  <div class="map-mount" id="map-mount"></div>
+  <div class="hud">
+    <div class="hud-dist" id="hud-dist">—</div>
+    <div class="hud-who" id="hud-who"></div>
+    <div class="hud-band" id="hud-band"></div>
+  </div>
+  <div class="cluecard">
+    <div class="kicker" id="cc-k"></div>
+    <div class="cc-t" id="cc-t"></div>
+    <div class="cc-d" id="cc-d"></div>
+  </div>
+  <button class="gbtn map-cta" id="map-cta"></button>
+</section>
+
+<!-- 拍照 -->
+<section class="screen dark" id="s-capture">
+  <video id="cam" playsinline muted autoplay></video>
+  <div class="cn c1"></div><div class="cn c2"></div>
+  <div class="cn c3"></div><div class="cn c4"></div>
+
+  <div class="pose">
+    <div class="kicker" id="pose-k"></div>
+    <div class="pose-t" id="pose-t"></div>
+  </div>
+  <div class="tip" id="cap-tip"></div>
+
+  <div class="qr-scan" id="qr-scan" hidden>
+    <div class="qr-frame"></div>
+    <div class="qr-hint" id="qr-hint"></div>
+  </div>
+
+  <button class="pill left" id="btn-qr"></button>
+  <button class="shutter" id="shutter" aria-label="拍照"></button>
+  <button class="pill right" id="btn-flip">切换镜头</button>
+  <button class="pill left" id="btn-skip" hidden></button>
+</section>
+
+<!-- 收信物 -->
+<section class="screen" id="s-reveal">
+  <div class="row">
+    <img class="plate" id="rv-photo" alt="她拍的那张照片">
+    <div class="rv-b">
+      <div class="kicker" id="rv-k"></div>
+      <h1 class="rv-t" id="rv-t"></h1>
+      <p class="body" id="rv-d"></p>
+      <button class="gbtn" id="rv-btn"></button>
+    </div>
+  </div>
+</section>
+
+<!-- 终章 -->
+<section class="screen" id="s-finale">
+  <div class="stack">
+    <div class="fn-photos" id="fn-photos"></div>
+    <h1 class="fn-t" id="fn-t"></h1>
+    <p class="body" id="fn-d"></p>
+    <button class="gbtn" id="fn-btn"></button>
+  </div>
+  <div class="letter" id="letter" hidden>
+    <div class="letter-in">
+      <div class="letter-body" id="letter-body"></div>
+      <button class="gbtn ghost" id="letter-close">合上</button>
+    </div>
+  </div>
+</section>
+
+<div class="toast" id="toast" hidden></div>
+
+<!-- 扫码解码器。落盘不放 CDN：当天网络不通也必须能扫。
+     加载失败只是 window.jsQR 为 undefined，app.js 会跳过扫码这一步，不影响主线。 -->
+<script defer src="vendor/jsQR.js"></script>
+<script type="module" src="app.js"></script>
+</body>
+</html>
