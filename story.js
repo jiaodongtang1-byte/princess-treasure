@@ -13,6 +13,8 @@ export const STORY = {
     footer: "写给 2026 年 10 月 9 日的你",
   },
 
+  /* ⚠️ 第 2、3 站的线索、姿势、信物目前是**占位内容**——为的是让流程能顺着走完。
+     不是真线索，等你定了藏礼物的地方再逐条替换。第 1 站的是真内容。 */
   stations: [
     {
       id: "tianjie",
@@ -42,11 +44,11 @@ export const STORY = {
       emblem: "rose",
       blurb: "有墙、安静、花底下藏着东西。走得慢一点，别看漏。",
 
-      clueTitle: "（第二站的线索待定）",
-      clueBody: "（待定）",
-      pose: "（姿势待定）",
-      relic: "（第二件信物待定）",
-      relicText: "（待定）",
+      clueTitle: "绕到墙后面去",
+      clueBody: "进了院子往里走，找到那面爬满藤的墙。礼物在墙的背面，别在正面找。",
+      pose: "把手举过头顶",
+      relic: "蔷薇",
+      relicText: "从墙头摘下来的那一朵。睡着的人等的是一个肯绕路的人。",
       qr: "P41-HEYUAN",
       map: { file: "data/合院.json", spanM: 520 },
     },
@@ -60,11 +62,11 @@ export const STORY = {
       emblem: "book",
       blurb: "书、灯、走过很多次的路。终章在这里。",
 
-      clueTitle: "（第三站的线索待定）",
-      clueBody: "（待定）",
-      pose: "（姿势待定）",
-      relic: "（第三件信物待定）",
-      relicText: "（待定）",
+      clueTitle: "去最高的那一层",
+      clueBody: "找最高的那栋楼，上到你能上去的最高一层。靠窗的位置，礼物在窗台上。",
+      pose: "举起一本书",
+      relic: "书签",
+      relicText: "夹在最厚那本书里的。读到哪一页不重要，重要的是谁在读。",
       qr: "P41-ZHULOU",
       map: { file: "data/主楼.json", spanM: 520 },
     },
@@ -74,7 +76,11 @@ export const STORY = {
     title: "三个国度都走完了",
     body: "三张照片在这里，一封信在下面。",
     button: "打开信",
-    letter: "（终章的信还没写）",
+    // 这封信应该是你自己的话，我不替你写。下面是占位，读起来通顺但不是真内容。
+    letter: "三件信物都到你手里了。\n\n"
+      + "今天是十月九日。三个地方，三件东西，全是你自己走到的。"
+      + "没有人替你走那几步路。\n\n"
+      + "（这封信等你来写。）",
   },
 
   /* 提示语。改这里不用动代码。 */
