@@ -31,3 +31,5 @@ verify-live.mjs
 map-*.png
 land/
 port/
+map-visual.mjs
+shot-map2.mjs
