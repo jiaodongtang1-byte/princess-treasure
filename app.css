@@ -109,19 +109,18 @@ html, body {
 .map-mount { position: absolute; inset: 0; }
 .map-mount svg { display: block; width: 100%; height: 100%; }
 
-/* HUD 压在地图上必须有纸底，否则深灰字落在米色路网上根本读不出来 */
-.hud { position: absolute; top: var(--pad); right: var(--padr); text-align: right;
-       z-index: 5; pointer-events: none;
-       background: rgba(255,251,244,.93); border-radius: 14px;
-       padding: 1.6vmin 2.4vmin; box-shadow: 0 5px 20px rgba(43,47,60,.13);
-       min-width: 22vmin; }
-.hud-dist { font: 600 var(--t-num)/1 var(--mono); letter-spacing: -.02em;
-            font-variant-numeric: tabular-nums; }
-.hud-dist small { font-size: calc(var(--t-num) * .38); margin-left: .3vmin; }
-.hud-who { font-size: var(--t-kicker); color: var(--ink2); margin-top: .8vmin; }
-.hud-band { display: inline-block; margin-top: 1.2vmin; padding: .5vmin 1.6vmin;
-            border-radius: 99px; background: rgba(184,145,47,.14); color: var(--gold);
-            font: var(--t-kicker)/1.5 var(--mono); }
+/* 状态提示压在地图上必须有纸底，否则深灰字落在米色路网里根本读不出来 */
+.hud-hint { position: absolute; top: var(--pad); right: var(--padr); z-index: 5;
+            pointer-events: none; background: rgba(255,251,244,.93); border-radius: 99px;
+            padding: 1vmin 2.2vmin; box-shadow: 0 5px 20px rgba(43,47,60,.13);
+            font: var(--t-kicker)/1.5 var(--mono); color: var(--ink2); }
+.hud-hint:empty { display: none; }
+
+/* 雷达盘：右下角，跟地图同一套信息，但只看方向和强弱 */
+.disc { position: absolute; right: var(--padr); bottom: var(--padb); z-index: 5;
+        width: 24vmin; height: 24vmin; pointer-events: none;
+        filter: drop-shadow(0 6px 22px rgba(43,47,60,.18)); }
+.disc svg { width: 100%; height: 100%; display: block; }
 
 /* 线索卡放左上、HUD 放右上，底边整条留给快门按钮和罗盘。
    原先卡在左下会跟按钮抢地方，窄屏上直接撞上。 */

@@ -1,24 +1,26 @@
 /* ============================================================================
-   主逻辑：六屏的状态机 + 定位/雷达 + 相机 + 存档。
-   文案与地点在 story.js；地图绘制在 map.js。这里只管流程和运行时。
+   主逻辑：六屏的状态机 + 实时地图 + 雷达 + 相机 + 存档。
+   文案与地点在 story.js；地图与雷达盘在 map.js；雷达判断与声音在 radar.js。
    ============================================================================ */
 
-import { STORY, emblemSvg, BANDS, HYSTERESIS } from "./story.js";
-import { renderMap, makeRadarLayer } from "./map.js";
+import { STORY, emblemSvg } from "./story.js";
+import { createMap, createRadarDisc } from "./map.js";
+import { createRadar } from "./radar.js";
 
 const $ = (id) => document.getElementById(id);
 const { stations, ui } = STORY;
+const radar = createRadar();
 
 /* ---------------------------------------------------------------- 存档 */
 
 const SAVE_KEY = "p41.progress";
-let state = { idx: 0, qr: {} };            // idx = 当前推进到第几站；qr = 哪些站扫过卡
+let state = { idx: 0, qr: {} };
 
 function loadState() {
   try {
     const s = JSON.parse(localStorage.getItem(SAVE_KEY) || "null");
     if (s && typeof s.idx === "number") state = { idx: s.idx, qr: s.qr || {} };
-  } catch { /* 存档坏了就当新的来 */ }
+  } catch {}
 }
 function saveState() {
   try { localStorage.setItem(SAVE_KEY, JSON.stringify(state)); } catch {}
@@ -68,53 +70,10 @@ function toast(msg, ms = 2600) {
   toast._t = setTimeout(() => { t.hidden = true; }, ms);
 }
 
-/* ---------------------------------------------------------------- 声音 */
+/* ---------------------------------------------------------------- 定位与实时地图 */
 
-const audio = { ctx: null, timer: null, band: null };
-
-function unlockAudio() {
-  if (audio.ctx) { if (audio.ctx.state === "suspended") audio.ctx.resume(); return; }
-  const Ctx = window.AudioContext || window.webkitAudioContext;
-  if (Ctx) audio.ctx = new Ctx();
-}
-
-function tone(freq, dur, gainPeak = 0.22) {
-  const c = audio.ctx;
-  if (!c) return;
-  const o = c.createOscillator(), g = c.createGain();
-  o.type = "sine"; o.frequency.value = freq;
-  const t0 = c.currentTime;
-  g.gain.setValueAtTime(0.0001, t0);
-  g.gain.linearRampToValueAtTime(gainPeak, t0 + 0.01);
-  g.gain.exponentialRampToValueAtTime(0.0001, t0 + dur);
-  o.connect(g); g.connect(c.destination);
-  o.start(t0); o.stop(t0 + dur + 0.03);
-}
-
-const BAND_FREQ = { far: 640, mid: 760, near: 900, here: 1040 };
-
-function setBand(band) {
-  if (audio.band && band && audio.band.key === band.key) return;
-  audio.band = band;
-  if (audio.timer) { clearTimeout(audio.timer); audio.timer = null; }
-  if (!band || !audio.ctx) return;
-
-  if (band.key === "here") {                    // 「到了」只响一声长的，不循环
-    tone(BAND_FREQ.here, 0.55, 0.26);
-    return;
-  }
-  const beat = () => {
-    if (audio.band !== band) return;            // 档位已经换了，这个循环作废
-    tone(BAND_FREQ[band.key] || 700, 0.07);
-    audio.timer = setTimeout(beat, band.beatMs);
-  };
-  beat();
-}
-function muteRadar() { setBand(null); }
-
-/* ---------------------------------------------------------------- 定位 */
-
-const geo = { watch: null, hist: [], last: null, acc: null, ok: false };
+const geo = { watch: null, ok: false, trail: [], lastDraw: 0, lastTrail: 0 };
+let map = null, disc = null;
 
 function startGeo() {
   if (!("geolocation" in navigator) || geo.watch !== null) return;
@@ -122,54 +81,50 @@ function startGeo() {
     enableHighAccuracy: true, maximumAge: 0, timeout: 25000,
   });
 }
+
 function onGeoErr(e) {
   geo.ok = false;
   if (current === "s-map") {
-    $("hud-dist").textContent = "—";
-    $("hud-band").textContent = e.code === 1 ? "没有定位权限" : "定位不可用";
+    $("hud-hint").textContent = e.code === 1 ? "没有定位权限" : "定位不可用";
     toast(ui.noGeo, 4200);
   }
 }
+
 function onFix(p) {
   geo.ok = true;
-  geo.acc = p.coords.accuracy;
-  // 中位数滤波：GPS 贴楼走会有多路径跳点，直接驱动滴声会抖成坏掉的样子
-  geo.hist.push({ lat: p.coords.latitude, lon: p.coords.longitude });
-  if (geo.hist.length > 5) geo.hist.shift();
-  const med = (i) => geo.hist.map((h) => h[i]).sort((a, b) => a - b)[geo.hist.length >> 1];
-  geo.last = { lat: med("lat"), lon: med("lon") };
-  if (current === "s-map") updateRadar();
+  const now = Date.now();
+  const fix = {
+    lat: p.coords.latitude, lon: p.coords.longitude,
+    acc: p.coords.accuracy, t: p.timestamp || now,
+  };
+
+  const s = radar.push(fix);
+
+  // 轨迹：每 5 秒落一个点，最多留 60 个（约 5 分钟）
+  if (now - geo.lastTrail > 5000) {
+    geo.lastTrail = now;
+    geo.trail.push(fix);
+    if (geo.trail.length > 60) geo.trail.shift();
+  }
+
+  // 重画限流：定位可能一秒来好几次，界面不需要跟着抖
+  if (current === "s-map" && now - geo.lastDraw > 900) {
+    geo.lastDraw = now;
+    redrawMap(s);
+  }
 }
 
-function meters(aLat, aLon, bLat, bLon) {
-  const R = 6371000, r = Math.PI / 180;
-  const dla = (bLat - aLat) * r, dlo = (bLon - aLon) * r;
-  const x = Math.sin(dla / 2) ** 2
-    + Math.cos(aLat * r) * Math.cos(bLat * r) * Math.sin(dlo / 2) ** 2;
-  return 2 * R * Math.asin(Math.sqrt(x));
-}
-
-/* 精度分层：精度差的时候不给「近」和「到了」的假希望，米数也不显示 */
-function accClass(a) {
-  if (a == null) return "good";
-  if (a <= 50) return "good";
-  if (a <= 150) return "mid";
-  return "coarse";
-}
-
-function naturalBand(d) {
-  for (let i = BANDS.length - 1; i >= 0; i--) if (d <= BANDS[i].maxM) return i;
-  return 0;
-}
-/* 迟滞：往近处走立刻进档；往远处退要越过出档阈值（放宽 20%）才退，
-   否则会在边界上来回切。 */
-let bandIdx = 0;
-function pickBand(d) {
-  const nat = naturalBand(d);
-  if (nat > bandIdx) bandIdx = nat;
-  else if (nat < bandIdx && d > BANDS[bandIdx].maxM * (1 + HYSTERESIS)) bandIdx = nat;
-  const cap = { good: 3, mid: 2, coarse: 1 }[accClass(geo.acc)];
-  return BANDS[Math.min(bandIdx, cap)];
+function redrawMap(s) {
+  if (!map) return;
+  if (!s || !geo.ok) {
+    map.draw({ me: null });
+    disc.update(null);
+    $("hud-hint").textContent = "找信号中…";
+    return;
+  }
+  map.draw({ me: s, trailPts: geo.trail });
+  disc.update({ dist: s.dist, bearing: s.bearing, spanM: map.spanM, signal: s.signal });
+  $("hud-hint").textContent = s.dist < 60 ? "就在附近了" : "";
 }
 
 /* ---------------------------------------------------------------- 地图屏 */
@@ -181,65 +136,41 @@ async function goMap(i) {
   document.documentElement.style.setProperty("--kc", st.color);
   show("s-map");
 
-  $("hud-who").textContent = st.kingdom;
   $("cc-k").textContent = ui.clueKickerShort(i);
   $("cc-t").textContent = st.clueTitle;
   $("cc-d").textContent = st.clueBody;
   $("map-cta").textContent = ui.toCapture;
 
-  let geo_ = mapCache.get(st.id);
-  if (!geo_) {
+  let geoData = mapCache.get(st.id);
+  if (!geoData) {
     try {
       const r = await fetch(st.map.file);
-      geo_ = await r.json();
-      mapCache.set(st.id, geo_);
+      geoData = await r.json();
+      mapCache.set(st.id, geoData);
     } catch {
       toast("地图数据没加载出来，雷达照样能用", 3800);
-      geo_ = [];
+      geoData = [];
     }
   }
 
-  const mount = $("map-mount");
-  const proj = renderMap(mount, geo_, { center: st.coord, spanM: st.map.spanM });
-  radarLayer = makeRadarLayer(proj.svg, proj);
-  projNow = proj;
-  bandIdx = 0;
-  updateRadar();
+  map = createMap($("map-mount"), geoData, st.coord);
+  if (!disc) {
+    disc = createRadarDisc($("disc"));
+    // 只有真滴了才扩散，不然安静的时候盘面还在一下一下跳，像坏了
+    radar.onPulse((signal) => { if (signal > 0) disc.pulse(); });
+  }
+
+  geo.trail = [];
+  radar.setTarget(st.coord);
+  radar.unlock();
+  radar.start();
   startGeo();
-}
-
-let radarLayer = null, projNow = null;
-
-function updateRadar() {
-  const st = stations[state.idx];
-  if (!geo.last || !projNow) {
-    // 占位符不要用「—」：在 49px 等宽粗体下它就是一根黑杠，很难看
-    $("hud-dist").textContent = "";
-    $("hud-band").textContent = geo.ok ? "找信号中…" : "等定位…";
-    radarLayer?.setMe(null);
-    return;
-  }
-  const d = meters(geo.last.lat, geo.last.lon, st.coord[0], st.coord[1]);
-  const band = pickBand(d);
-  const cls = accClass(geo.acc);
-
-  if (cls === "coarse") {
-    $("hud-dist").textContent = band.label;
-  } else {
-    $("hud-dist").innerHTML = `${Math.round(d)}<small>米</small>`;
-    if (cls === "mid") $("hud-dist").textContent = "约 " + $("hud-dist").textContent;
-  }
-  $("hud-band").textContent = band.key === "here"
-    ? "到了 · 就在附近"
-    : `${band.label} · 滴声 ${(band.beatMs / 1000).toFixed(1)} 秒一次`;
-
-  radarLayer.setMe([projNow.px([geo.last.lat, geo.last.lon]), projNow.py([geo.last.lat, geo.last.lon])]);
-  setBand(band);
+  redrawMap(radar.state);
 }
 
 /* ---------------------------------------------------------------- 相机 */
 
-const cam = { stream: null, facing: "user", shot: null };
+const cam = { stream: null, facing: "user", shot: null, err: null };
 
 async function startCam() {
   stopCam();
@@ -269,7 +200,6 @@ function grabShot() {
   const c = document.createElement("canvas");
   c.width = v.videoWidth; c.height = v.videoHeight;
   const ctx = c.getContext("2d");
-  // 前摄镜像：预览是镜像的，存下来也镜像，所见即所得
   if (cam.facing === "user") { ctx.translate(c.width, 0); ctx.scale(-1, 1); }
   ctx.drawImage(v, 0, 0);
   return c.toDataURL("image/jpeg", 0.82);
@@ -281,12 +211,11 @@ function grabShot() {
 
 const qrReady = () => typeof window.jsQR === "function";
 
-/* 三条约束都是踩出来的（第一版每帧在 448² 上跑 jsQR，直接把渲染进程压垮，
-   测试台报 “Execution context was destroyed”）：
-   ① 限速：约 6 次/秒就够认二维码了，60fps 纯属白烧 CPU
-   ② 画布尺寸只设一次：每帧改 width/height 会重新分配位图
-   ③ 停就真停：原版在隐藏后仍然无限 rAF，是个泄漏 */
-const QR_SIDE = 320;                            // 认二维码够用了，再大只是更慢
+/* 三条约束都是踩出来的（第一版每帧在 448² 上跑 jsQR，直接把渲染进程压垮）：
+   ① 限速：约 6 次/秒就够认二维码了
+   ② 画布尺寸只设一次
+   ③ 停就真停，别留无限 rAF */
+const QR_SIDE = 320;
 const QR_MIN_GAP_MS = 160;
 let qrLoop = null, qrActive = false, qrCanvas = null;
 
@@ -359,6 +288,7 @@ function goClue(i) {
 async function goCapture(i) {
   const st = stations[i];
   state.idx = i;
+  radar.stop();
   $("pose-k").textContent = st.kingdom;
   $("pose-t").textContent = st.pose;
   $("qr-scan").hidden = true;
@@ -400,17 +330,16 @@ function goReveal(i, photo) {
 async function goFinale() {
   const photos = await Promise.all(stations.map((s) => getPhoto(s.id)));
   $("fn-photos").innerHTML = stations.map((s, i) =>
-    `<img src="${photos[i] || ""}" alt="${s.kingdom}" style="border-color:#fff">`).join("");
+    `<img src="${photos[i] || ""}" alt="${s.kingdom}">`).join("");
   $("fn-t").textContent = STORY.final.title;
   $("fn-d").textContent = STORY.final.body;
   $("fn-btn").textContent = STORY.final.button;
   $("letter-body").textContent = STORY.final.letter;
   $("letter").hidden = true;
   show("s-finale");
-  muteRadar();
+  radar.stop();
 }
 
-/* 拍完 →（有卡片就扫码）→ 收信物 */
 async function finishCapture(st) {
   const photo = cam.shot;
   if (photo) await putPhoto(st.id, photo);
@@ -421,8 +350,7 @@ async function finishCapture(st) {
 /* ---------------------------------------------------------------- 绑定 */
 
 $("cover-btn").addEventListener("click", () => {
-  unlockAudio();                                 // iOS 音频要用户手势才能起
-  startGeo();
+  radar.unlock();                     // iOS 音频要用户手势才能起
   goClue(state.idx);
 });
 
@@ -435,11 +363,12 @@ $("shutter").addEventListener("click", async () => {
   if (!cam.shot) return;
   const st = stations[state.idx];
   const needQr = qrReady() && !state.qr[st.id];
-  if (!needQr) { muteRadar(); finishCapture(st); return; }
-  // 有卡片就扫一下——这是「真的去过」的硬证据；找不到可以跳过
+  if (!needQr) { finishCapture(st); return; }
   $("shutter").hidden = true;
   $("btn-qr").hidden = true;
   $("btn-skip").hidden = false;
+  $("qr-skip-label") && ($("qr-skip-label").textContent = ui.qrSkip);
+  $("btn-skip").textContent = ui.qrSkip;
   $("qr-hint").textContent = ui.scanning;
   $("qr-scan").hidden = false;
   startQrScan(st);
@@ -450,6 +379,7 @@ $("btn-qr").addEventListener("click", () => {
   $("shutter").hidden = true;
   $("btn-qr").hidden = true;
   $("btn-skip").hidden = false;
+  $("btn-skip").textContent = ui.qrSkip;
   $("qr-hint").textContent = ui.scanning;
   $("qr-scan").hidden = false;
   startQrScan(st);
@@ -458,12 +388,11 @@ $("btn-qr").addEventListener("click", () => {
 $("btn-skip").addEventListener("click", () => {
   stopQrScan();
   $("qr-scan").hidden = true;
-  muteRadar();
   finishCapture(stations[state.idx]);
 });
 
 $("btn-flip").addEventListener("click", async () => {
-  if (!cam.stream) { await openCamera(); return; }   // 相机没开时这个按钮是「再试一次」
+  if (!cam.stream) { await openCamera(); return; }
   cam.facing = cam.facing === "user" ? "environment" : "user";
   await openCamera();
 });
@@ -477,22 +406,17 @@ $("rv-btn").addEventListener("click", () => {
 $("fn-btn").addEventListener("click", () => { $("letter").hidden = false; });
 $("letter-close").addEventListener("click", () => { $("letter").hidden = true; });
 
-// 切到后台就闭嘴，回来再响
 document.addEventListener("visibilitychange", () => {
-  if (document.hidden) muteRadar();
+  if (document.hidden) radar.stop();
+  else if (current === "s-map") radar.start();
 });
 
 /* ---------------------------------------------------------------- 启动 */
 
 loadState();
-if (state.idx > 0) {
-  // 接着上次的地方走（照片还在 IndexedDB 里）
-  goClue(Math.min(state.idx, stations.length - 1));
-} else {
-  goCover();
-}
+if (state.idx > 0) goClue(Math.min(state.idx, stations.length - 1));
+else goCover();
 
-// Service Worker：装到主屏后断网也能翻完。file:// 打开时注册不了，忽略即可。
 if ("serviceWorker" in navigator && location.protocol.startsWith("http")) {
   window.addEventListener("load", () => {
     navigator.serviceWorker.register("./sw.js").catch(() => {});
