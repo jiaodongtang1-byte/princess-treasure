@@ -1,6 +1,6 @@
 /* 缓存优先：装到主屏之后，断网也能翻完整本书（照片和进度本来就在本机）。
    改了文件记得把 VERSION 加一，否则老缓存会被继续用。 */
-const VERSION = "p41-v4";
+const VERSION = "p41-v5";
 
 const SHELL = [
   "./",
@@ -15,9 +15,7 @@ const SHELL = [
   "./icons/icon-180.png",
   "./icons/icon-192.png",
   "./icons/icon-512.png",
-  "./data/天街.json",
-  "./data/合院.json",
-  "./data/主楼.json",
+  "./data/地图.json",
 ];
 
 self.addEventListener("install", (e) => {

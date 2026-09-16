@@ -32,7 +32,7 @@ export const STORY = {
       relic: "玻璃鞋",
       relicText: "舞会散场时落下的那只。找到它的人，是被记住的人。",
       qr: "P41-TIANJIE",                   // 卡片二维码里编的字符串，扫到才认
-      map: { file: "data/天街.json", spanM: 520 },
+      map: { file: "data/地图.json" },
     },
     {
       id: "heyuan",
@@ -50,7 +50,7 @@ export const STORY = {
       relic: "蔷薇",
       relicText: "从墙头摘下来的那一朵。睡着的人等的是一个肯绕路的人。",
       qr: "P41-HEYUAN",
-      map: { file: "data/合院.json", spanM: 520 },
+      map: { file: "data/地图.json" },
     },
     {
       id: "zhulou",
@@ -68,7 +68,7 @@ export const STORY = {
       relic: "书签",
       relicText: "夹在最厚那本书里的。读到哪一页不重要，重要的是谁在读。",
       qr: "P41-ZHULOU",
-      map: { file: "data/主楼.json", spanM: 520 },
+      map: { file: "data/地图.json" },
     },
   ],
 

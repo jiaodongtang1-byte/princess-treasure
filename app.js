@@ -72,7 +72,7 @@ function toast(msg, ms = 2600) {
 
 /* ---------------------------------------------------------------- 定位与实时地图 */
 
-const geo = { watch: null, ok: false, trail: [], lastDraw: 0, lastTrail: 0 };
+const geo = { watch: null, ok: false, err: null, lastFix: null, trail: [], lastDraw: 0, lastTrail: 0, drawTimer: null };
 let map = null, disc = null;
 
 function startGeo() {
@@ -84,20 +84,22 @@ function startGeo() {
 
 function onGeoErr(e) {
   geo.ok = false;
-  if (current === "s-map") {
-    $("hud-hint").textContent = e.code === 1 ? "没有定位权限" : "定位不可用";
-    toast(ui.noGeo, 4200);
-  }
+  // 记下来。不然重画时会被「找信号中…」盖掉——权限被拒是永远找不回来的，
+  // 一直骗她在等信号，她只会一直站着等。
+  geo.err = e.code === 1 ? "没有定位权限" : "定位不可用";
+  if (current === "s-map") toast(ui.noGeo, 4200);
 }
 
 function onFix(p) {
   geo.ok = true;
+  geo.err = null;
   const now = Date.now();
   const fix = {
     lat: p.coords.latitude, lon: p.coords.longitude,
     acc: p.coords.accuracy, t: p.timestamp || now,
   };
 
+  geo.lastFix = fix;
   const s = radar.push(fix);
 
   // 轨迹：每 5 秒落一个点，最多留 60 个（约 5 分钟）
@@ -107,24 +109,40 @@ function onFix(p) {
     if (geo.trail.length > 60) geo.trail.shift();
   }
 
-  // 重画限流：定位可能一秒来好几次，界面不需要跟着抖
-  if (current === "s-map" && now - geo.lastDraw > 900) {
+  // 重画限流：定位可能一秒来好几次，界面不需要跟着抖。
+  // 但被挡掉的那一次必须补画——否则「停下来看地图」正好卡在被丢掉的最后一帧上，
+  // 显示的是几步之前的旧位置（这个 bug 实测过：盘面停在 160 米，人已经在 120 米）。
+  if (current !== "s-map") return;
+  clearTimeout(geo.drawTimer);
+  if (now - geo.lastDraw > 900) {
     geo.lastDraw = now;
     redrawMap(s);
+  } else {
+    geo.drawTimer = setTimeout(() => {
+      geo.lastDraw = Date.now();
+      redrawMap(radar.state);
+    }, 900 - (now - geo.lastDraw));
   }
 }
 
+/* 地图只认定位点，雷达要攒够两个点才算得出速度——
+   所以刚开始那几秒地图已经有位置可画了，别跟着雷达一起装死。 */
 function redrawMap(s) {
   if (!map) return;
-  if (!s || !geo.ok) {
-    map.draw({ me: null });
+  if (!geo.ok || !geo.lastFix) {
+    map.draw({ me: null });            // 没有定位就退回到「以信物为中心」，至少知道宝藏在哪
     disc.update(null);
-    $("hud-hint").textContent = "找信号中…";
+    $("hud-hint").textContent = geo.err || "找信号中…";
     return;
   }
-  map.draw({ me: s, trailPts: geo.trail });
+  map.draw({ me: geo.lastFix, trailPts: geo.trail, signal: s ? s.signal : 0 });
   disc.update({ dist: s.dist, bearing: s.bearing, spanM: map.spanM, signal: s.signal });
-  $("hud-hint").textContent = s.dist < 60 ? "就在附近了" : "";
+  // 地图上那枚箭头已经指明了方向，提示只补它说不了的：还有多远、是不是走对了
+  $("hud-hint").textContent =
+    s.dist < 60 ? "就在附近了"
+    : s.signal > 0.5 ? "对，就是这个方向"
+    : s.signal > 0 ? "差不多是这个方向"
+    : "跟着箭头走";
 }
 
 /* ---------------------------------------------------------------- 地图屏 */
@@ -141,12 +159,13 @@ async function goMap(i) {
   $("cc-d").textContent = st.clueBody;
   $("map-cta").textContent = ui.toCapture;
 
-  let geoData = mapCache.get(st.id);
+  // 三站共用同一张底图，按文件路径缓存——按站点缓存会把同一份数据取三遍
+  let geoData = mapCache.get(st.map.file);
   if (!geoData) {
     try {
       const r = await fetch(st.map.file);
       geoData = await r.json();
-      mapCache.set(st.id, geoData);
+      mapCache.set(st.map.file, geoData);
     } catch {
       toast("地图数据没加载出来，雷达照样能用", 3800);
       geoData = [];

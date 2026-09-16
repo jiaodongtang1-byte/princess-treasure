@@ -80,19 +80,22 @@ export function createRadar() {
   }
 
   function compute() {
-    if (!target || hist.length < 2) return null;
+    if (!target || !hist.length) return null;
     const now = hist[hist.length - 1];
-    // 取窗口内最老的一个点做基线，基线越长噪声影响越小
+    // 取窗口内最老的一个点做基线，基线越长噪声影响越小。
+    // 只有一个点（或间隔不足 1 秒）时算不出速度——那不是「没数据」，
+    // 是「还不知道她在不在走」：距离和方位照样给，速度记 0 就行。
+    // 这样地图和盘面一拿到定位就有东西可显示，不用干等 5 秒。
     let base = hist[0];
     for (const h of hist) { if (now.t - h.t <= BASELINE_MS) { base = h; break; } }
     const dt = (now.t - base.t) / 1000;
-    if (dt < 1) return null;
+    const ok = dt >= 1;
 
     const dNow = meters(now.lat, now.lon, target[0], target[1]);
-    const dOld = meters(base.lat, base.lon, target[0], target[1]);
-    const moved = meters(now.lat, now.lon, base.lat, base.lon);
-    const speed = moved / dt;
-    const closing = (dOld - dNow) / dt;
+    const dOld = ok ? meters(base.lat, base.lon, target[0], target[1]) : dNow;
+    const moved = ok ? meters(now.lat, now.lon, base.lat, base.lon) : 0;
+    const speed = ok ? moved / dt : 0;
+    const closing = ok ? (dOld - dNow) / dt : 0;
     const cos = speed > 0.08 ? closing / speed : 0;
 
     state = {
