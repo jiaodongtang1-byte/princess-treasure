@@ -27,7 +27,7 @@ shot-*.png
 cards/
 verify-live.mjs
 
-# 走查截图（本地看，不进仓库）
-*-*.png
+# 走查截图（本地看，不进仓库）。注意别写成 *-*.png——那个连 icon-192.png 一起挡了
+map-*.png
 land/
 port/
