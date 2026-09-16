@@ -26,3 +26,8 @@ shot-*.png
 # 卡片是给你拿去打印的，不是网站的一部分；而且码的内容本来就在 story.js 里
 cards/
 verify-live.mjs
+
+# 走查截图（本地看，不进仓库）
+*-*.png
+land/
+port/
