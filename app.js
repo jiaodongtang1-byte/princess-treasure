@@ -173,6 +173,10 @@ async function goMap(i) {
   }
 
   map = createMap($("map-mount"), geoData, st.coord);
+  // 她一动手指扒图，「回到我的位置」就出现；按下去就藏起来
+  $("recenter").textContent = ui.recenter;
+  map.onFollow((on) => { $("recenter").hidden = on; });
+  $("recenter").hidden = true;
   if (!disc) {
     disc = createRadarDisc($("disc"));
     // 只有真滴了才扩散，不然安静的时候盘面还在一下一下跳，像坏了
@@ -376,6 +380,8 @@ $("cover-btn").addEventListener("click", () => {
 $("clue-btn").addEventListener("click", () => goMap(state.idx));
 
 $("map-cta").addEventListener("click", () => goCapture(state.idx));
+
+$("recenter").addEventListener("click", () => map?.followMe());
 
 $("shutter").addEventListener("click", async () => {
   cam.shot = grabShot();

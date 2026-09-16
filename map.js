@@ -261,7 +261,13 @@ export function createMap(mount, geo, target) {
   mount.replaceChildren(svg);
 
   let span = 900, center = { x: 0, y: 0 };
-  const t2s = { k: 1, cy: H / 2 };
+  const t2s = { k: 1, cy: H / 2, cpm: 1, cw: W, ch: H };
+
+  /* 自动跟随 vs 手动扒图。她一动手指就切手动（地图不再自己跑），
+     按「回到我的位置」才切回来——不自动切回，否则她正在看的地方会被悄悄挪走。 */
+  let follow = true, lastArgs = { me: null, trailPts: [], signal: 0 };
+  let onFollow = null;
+  const setFollow = (v) => { if (follow !== v) { follow = v; onFollow?.(v); } };
 
   /* 压在地图上的那几块界面（线索卡、雷达盘、按钮），换算成 viewBox 坐标。
      箭头要是钻到它们底下，等于没给指路——所以得知道它们在哪。 */
@@ -287,6 +293,7 @@ export function createMap(mount, geo, target) {
 
   /** 重画一帧。me 传 null 就是还没定位——那会儿以信物为中心。 */
   function draw({ me: meFix = null, trailPts = [], signal = 0 } = {}) {
+    lastArgs = { me: meFix, trailPts, signal };
     /* viewBox 跟着屏幕比例走，不是写死 1000×750。
        写死的话 preserveAspectRatio=slice 在竖屏会裁掉左右各四分之一的地图
        （竖屏可见宽度只剩 52%），贴边的标签和箭头也就画到框外面去了。
@@ -298,21 +305,24 @@ export function createMap(mount, geo, target) {
     const VX0 = 0, VY0 = 0, VX1 = W, VY1 = VH;
     const s = cw / W;                                // CSS px → viewBox 单位
     const px = (v) => v / s;
+    t2s.cpm = cw / span; t2s.cw = cw; t2s.ch = ch;   // 手指换算：CSS px / 米、以及画布 CSS 尺寸
 
     let needM = 900;
 
     if (meFix) {
       const mx = wx(meFix.lon), my = wy(meFix.lat);
       meFix._X = mx; meFix._Y = my;
-      const d = Math.hypot(mx, my);
-      // 以「你」为中心。视野随距离缓慢放开，但封在 1300 米内：
-      // 再远就只剩色块，看不出自己在哪——远处的信物由边缘箭头负责。
-      needM = clamp(d * 1.4 + 220, 250, 1300);
-      center = { x: mx, y: my };
-    } else {
+      if (follow) {
+        const d = Math.hypot(mx, my);
+        // 以「你」为中心。视野随距离缓慢放开，但封在 1300 米内：
+        // 再远就只剩色块，看不出自己在哪——远处的信物由边缘箭头负责。
+        needM = clamp(d * 1.4 + 220, 250, 1300);
+        center = { x: mx, y: my };
+      }
+    } else if (follow) {
       center = { x: 0, y: 0 };
     }
-    span = pickSpan(needM, span);
+    if (follow) span = pickSpan(needM, span);    // 手动缩放时档位让位给她的手指
 
     const k = W / span;                          // viewBox 单位 / 米
     t2s.k = k; t2s.cy = VY1 / 2;
@@ -437,7 +447,85 @@ export function createMap(mount, geo, target) {
             Y * t2s.k + t2s.cy - center.y * t2s.k];
   }
 
-  return { draw, toScreen, get spanM() { return span; }, wx, wy, W, H, svg };
+  const repaint = () => draw(lastArgs);
+  const clampCenter = () => {
+    // 别让她一手指把地图推到没有数据的地方，然后以为是坏了
+    center.x = clamp(center.x, -20000, 20000);
+    center.y = clamp(center.y, -20000, 20000);
+  };
+
+  /* ---- 拖动平移 / 双指缩放 ----
+     用 pointer 事件而不是 touch：iOS 上 pointer 事件带 pointerId，
+     两指各算各的，不用自己维护 touch 列表。 */
+  const pts = new Map();
+  let rect = null, pinchIds = null, pinchD0 = 0, span0 = 0;
+
+  mount.addEventListener("pointerdown", (e) => {
+    if (!pts.size) rect = mount.getBoundingClientRect();
+    pts.set(e.pointerId, { x: e.clientX, y: e.clientY });
+    if (pts.size === 1) setFollow(false);
+    if (pts.size === 2) {
+      pinchIds = [...pts.keys()];
+      const [a, b] = pinchIds.map((i) => pts.get(i));
+      pinchD0 = Math.hypot(a.x - b.x, a.y - b.y);
+      span0 = span;
+    }
+    // 合成事件（测试台）里的 pointerId 没有真实指针，会抛 NotFoundError。
+    // 抓不住就算了，指针留在元素内一样收得到 move。
+    try { mount.setPointerCapture(e.pointerId); } catch {}
+  });
+
+  mount.addEventListener("pointermove", (e) => {
+    const p = pts.get(e.pointerId);
+    if (!p) return;
+    const dx = e.clientX - p.x, dy = e.clientY - p.y;
+    p.x = e.clientX; p.y = e.clientY;
+
+    if (pts.size === 1) {
+      // 手指往右拖，地图跟着往右走，所以视野中心是往左挪
+      center.x -= dx / t2s.cpm;
+      center.y -= dy / t2s.cpm;
+      clampCenter();
+    } else if (pinchIds && pts.size >= 2) {
+      /* 缩放要用「起始距离 ÷ 当前距离」这种绝对算法，不能每帧拿上一次的结果连乘——
+         两根手指各发各的 pointermove，连乘会把同一段位移算两遍
+         （实测：捏合放大，结果视野从 1300 米被推到 4876 米）。 */
+      const [a, b] = pinchIds.map((i) => pts.get(i));
+      const d = Math.hypot(a.x - b.x, a.y - b.y);
+      if (pinchD0 > 0 && d > 0) {
+        const next = clamp(span0 * pinchD0 / d, 80, 8000);
+        if (next !== span) {
+          // 把两指中点底下的那个地点钉住，缩放手感才跟在指头上（不然会从中心往外窜）
+          const cx = (a.x + b.x) / 2 - rect.left, cy2 = (a.y + b.y) / 2 - rect.top;
+          const wxp = center.x + (cx - t2s.cw / 2) / t2s.cpm;
+          const wyp = center.y + (cy2 - t2s.ch / 2) / t2s.cpm;
+          span = next;
+          const cpm2 = t2s.cw / span;
+          center.x = wxp - (cx - t2s.cw / 2) / cpm2;
+          center.y = wyp - (cy2 - t2s.ch / 2) / cpm2;
+          clampCenter();
+        }
+      }
+    }
+    repaint();
+  });
+
+  const lift = (e) => {
+    pts.delete(e.pointerId);
+    if (pts.size < 2) pinchIds = null;
+  };
+  mount.addEventListener("pointerup", lift);
+  mount.addEventListener("pointercancel", lift);
+  mount.addEventListener("pointerleave", lift);
+
+  return {
+    draw, toScreen, repaint, wx, wy, W, H, svg,
+    get spanM() { return span; },
+    get following() { return follow; },
+    onFollow(fn) { onFollow = fn; },
+    // 回到「以我为中心」。立即重画一帧，不等下一个定位点。
+    followMe() { setFollow(true); repaint(); },
+  };
 }
 
 /* ------------------------------------------------------------------ 雷达盘

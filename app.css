@@ -106,8 +106,14 @@ html, body {
 
 /* ---------- 地图 ---------- */
 #s-map { padding: 0; }
-.map-mount { position: absolute; inset: 0; }
+.map-mount { position: absolute; inset: 0; touch-action: none; }
 .map-mount svg { display: block; width: 100%; height: 100%; }
+
+/* 她动过手指之后才出现：地图不再自己跟着跑，得有个明确的回头路。
+   放雷达盘正上方，拇指够得着，也不压住底部那颗「我到了，拍照」。 */
+.recenter { position: absolute; right: var(--padr); bottom: calc(var(--padb) + 26vmin);
+            z-index: 6; }
+.recenter[hidden] { display: none; }
 
 /* 状态提示压在地图上必须有纸底，否则深灰字落在米色路网里根本读不出来 */
 .hud-hint { position: absolute; top: var(--pad); right: var(--padr); z-index: 5;

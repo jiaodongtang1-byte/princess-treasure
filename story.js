@@ -89,6 +89,7 @@ export const STORY = {
     clueKickerShort: (n) => `线 索 · 其 ${["一", "二", "三"][n] || n + 1}`,
     clueButton: "带着这个线索出发",
     toCapture: "我到了，拍照",
+    recenter: "回到我的位置",
     qrHint: "扫一扫礼物旁边的卡片",
     qrSkip: "卡片找不到，跳过",
     qrDone: "卡片已确证",
