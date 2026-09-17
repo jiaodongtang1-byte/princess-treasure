@@ -57,8 +57,9 @@ const SPANS = [250, 380, 550, 850, 1300, 2000, 3200, 5000, 8000];
 export function pickSpan(needM, current) {
   for (const s of SPANS) {
     if (needM <= s) {
-      // 要往小档换，得明显小于当前档才换（迟滞 25%）
-      if (current && s < current && needM > s * 0.75) return current;
+      // 要往小档换，得明显小于当前档才换（迟滞 25%）。没到门槛时只退到目标档的上一档，
+      // 不能整个退回 current——否则在信物旁打开地图（current=1300）会永远卡在最远档
+      if (current && s < current && needM > s * 0.75) return Math.min(current, SPANS[SPANS.indexOf(s) + 1] ?? current);
       return s;
     }
   }
@@ -274,7 +275,7 @@ export function createMap(mount, geo, target) {
   /* 箭头躲全部三块；标签只躲雷达盘和按钮。
      线索卡占了左上角一大片，标签要是也躲它，半个屏幕的名字就全没了——
      被卡片压掉半个字，也比为了躲它让一整片地图没有名字强。 */
-  const BLOCK_ARROW = [".cluecard", ".disc", ".map-cta"];
+  const BLOCK_ARROW = [".cluecard", ".disc", ".map-cta", ".hud-hint", ".recenter"];
   const BLOCK_LABEL = [".disc", ".map-cta"];
   function blockers(VX0, VY0, s, sels = BLOCK_ARROW) {
     const mr = svg.getBoundingClientRect();
@@ -305,7 +306,6 @@ export function createMap(mount, geo, target) {
     const VX0 = 0, VY0 = 0, VX1 = W, VY1 = VH;
     const s = cw / W;                                // CSS px → viewBox 单位
     const px = (v) => v / s;
-    t2s.cpm = cw / span; t2s.cw = cw; t2s.ch = ch;   // 手指换算：CSS px / 米、以及画布 CSS 尺寸
 
     let needM = 900;
 
@@ -323,6 +323,7 @@ export function createMap(mount, geo, target) {
       center = { x: 0, y: 0 };
     }
     if (follow) span = pickSpan(needM, span);    // 手动缩放时档位让位给她的手指
+    t2s.cpm = cw / span; t2s.cw = cw; t2s.ch = ch;   // 手指换算：CSS px / 米。必须在换档之后算，否则下一次拖动用的是旧档
 
     const k = W / span;                          // viewBox 单位 / 米
     t2s.k = k; t2s.cy = VY1 / 2;
@@ -390,7 +391,9 @@ export function createMap(mount, geo, target) {
 
     // 四边留白不一样：下边要躲开「我到了，拍照」那颗大按钮
     const PADX = 40, PADT = 40, PADB = 100;
-    const off = px_ < VX0 + PADX || px_ > VX1 - PADX || py_ < VY0 + PADT || py_ > VY1 - PADB;
+    // 信物落在线索卡/雷达盘底下也算「看不见」，改用箭头——不然别针被卡片整个盖住，画面上什么都没有
+    const inBlk = (x, y) => blks.some(([x0, y0, x1, y1]) => x > x0 - 10 && x < x1 + 10 && y > y0 - 10 && y < y1 + 10);
+    const off = px_ < VX0 + PADX || px_ > VX1 - PADX || py_ < VY0 + PADT || py_ > VY1 - PADB || inBlk(px_, py_);
 
     let ax = px_, ay = py_;
     if (off) {
@@ -410,10 +413,12 @@ export function createMap(mount, geo, target) {
         for (const [cx, cy] of [[x0 - 10, ay], [x1 + 10, ay], [ax, y0 - 10], [ax, y1 + 10]]) {
           const px2 = clamp(cx, VX0 + PADX, VX1 - PADX);
           const py2 = clamp(cy, VY0 + PADT, VY1 - PADB);
+          // 浮层贴着屏幕边，往外推的候选会被夹回原位（距离 0，永远胜出）——那不算推出去
+          if (px2 > x0 - 10 && px2 < x1 + 10 && py2 > y0 - 10 && py2 < y1 + 10) continue;
           const d = Math.hypot(px2 - ax, py2 - ay);
           if (!best || d < best[2]) best = [px2, py2, d];
         }
-        ax = best[0]; ay = best[1];
+        if (best) { ax = best[0]; ay = best[1]; }
       }
       pinFar.setAttribute("transform",
         `translate(${ax.toFixed(1)} ${ay.toFixed(1)}) rotate(${(Math.atan2(py_ - VY1 / 2, px_ - W / 2) * 180 / Math.PI).toFixed(1)})`);
@@ -460,7 +465,9 @@ export function createMap(mount, geo, target) {
   const pts = new Map();
   let rect = null, pinchIds = null, pinchD0 = 0, span0 = 0;
 
-  mount.addEventListener("pointerdown", (e) => {
+  /* 用 onpointerxxx 属性而不是 addEventListener：mount 是常驻节点，每站都会重建地图，
+     属性赋值会顶掉上一张地图的处理函数；addEventListener 会一站叠一套，旧地图跟着白算。 */
+  mount.onpointerdown = (e) => {
     if (!pts.size) rect = mount.getBoundingClientRect();
     pts.set(e.pointerId, { x: e.clientX, y: e.clientY });
     if (pts.size === 1) setFollow(false);
@@ -473,9 +480,9 @@ export function createMap(mount, geo, target) {
     // 合成事件（测试台）里的 pointerId 没有真实指针，会抛 NotFoundError。
     // 抓不住就算了，指针留在元素内一样收得到 move。
     try { mount.setPointerCapture(e.pointerId); } catch {}
-  });
+  };
 
-  mount.addEventListener("pointermove", (e) => {
+  mount.onpointermove = (e) => {
     const p = pts.get(e.pointerId);
     if (!p) return;
     const dx = e.clientX - p.x, dy = e.clientY - p.y;
@@ -508,15 +515,13 @@ export function createMap(mount, geo, target) {
       }
     }
     repaint();
-  });
+  };
 
   const lift = (e) => {
     pts.delete(e.pointerId);
     if (pts.size < 2) pinchIds = null;
   };
-  mount.addEventListener("pointerup", lift);
-  mount.addEventListener("pointercancel", lift);
-  mount.addEventListener("pointerleave", lift);
+  mount.onpointerup = mount.onpointercancel = mount.onpointerleave = lift;
 
   return {
     draw, toScreen, repaint, wx, wy, W, H, svg,
@@ -524,7 +529,8 @@ export function createMap(mount, geo, target) {
     get following() { return follow; },
     onFollow(fn) { onFollow = fn; },
     // 回到「以我为中心」。立即重画一帧，不等下一个定位点。
-    followMe() { setFollow(true); repaint(); },
+    // span 清零：双指缩放过的比例不算数，按当前距离重新挑档（否则迟滞会把手动比例一直留着）
+    followMe() { span = 0; setFollow(true); repaint(); },
   };
 }
 
@@ -583,6 +589,7 @@ export function createRadarDisc(mount) {
   mount.replaceChildren(svg);
 
   let lastPulse = 0;
+  let coarse = false;          // 近/中/远 模式带迟滞：精度在 50 米上下跳时别每秒切一次
   function pulseNow() {
     const t = performance.now();
     if (t - lastPulse < 130) return;             // 太快了就视觉疲劳，也别浪费动画
@@ -606,8 +613,15 @@ export function createRadarDisc(mount) {
                 blip.style.display = "none"; sweep.style.display = "none"; return; }
       unit.style.display = "";
       sweep.style.display = "";
-      num.textContent = s.dist < 1000 ? Math.round(s.dist) : (s.dist / 1000).toFixed(1);
-      unit.textContent = s.dist < 1000 ? "米" : "公里";
+      coarse = s.acc > (coarse ? 35 : 50);
+      if (coarse) {
+        // 精度差到几十米时报「37 米」是假精确，改说近/中/远
+        num.textContent = s.dist < 60 ? "近" : s.dist < 300 ? "中" : "远";
+        unit.style.display = "none";
+      } else {
+        num.textContent = s.dist < 1000 ? Math.round(s.dist) : (s.dist / 1000).toFixed(1);
+        unit.textContent = s.dist < 1000 ? "米" : "公里";
+      }
 
       // 半径按当前视野归一，跟地图是一个尺度
       const rr = clamp(s.dist / (s.spanM / 2), 0, 1) * 86;

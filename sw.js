@@ -1,6 +1,6 @@
 /* 缓存优先：装到主屏之后，断网也能翻完整本书（照片和进度本来就在本机）。
    改了文件记得把 VERSION 加一，否则老缓存会被继续用。 */
-const VERSION = "p41-v6";
+const VERSION = "p41-v7";
 
 const SHELL = [
   "./",
@@ -21,8 +21,9 @@ const SHELL = [
 self.addEventListener("install", (e) => {
   e.waitUntil(
     caches.open(VERSION)
-      // 逐个加，一个文件 404 不至于让整个安装失败
-      .then((c) => Promise.all(SHELL.map((u) => c.add(u).catch(() => {}))))
+      // 整体装：缺一个文件就整个装不上、旧版继续用。原先逐个吞错，缺了 story.js 也照样激活，断网冷启动白屏。
+      // cache: "reload" 绕过 HTTP 缓存（GitHub Pages 给 max-age=600），否则 10 分钟内连推两次，新版本号里装的是旧文件
+      .then((c) => c.addAll(SHELL.map((u) => new Request(u, { cache: "reload" }))))
       .then(() => self.skipWaiting())
   );
 });

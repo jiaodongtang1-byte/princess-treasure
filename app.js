@@ -43,7 +43,7 @@ async function putPhoto(key, dataUrl) {
   return new Promise((res, rej) => {
     const t = d.transaction(STORE, "readwrite");
     t.objectStore(STORE).put(dataUrl, key);
-    t.oncomplete = res; t.onerror = () => rej(t.error);
+    t.oncomplete = res; t.onerror = t.onabort = () => rej(t.error);
   });
 }
 async function getPhoto(key) {
@@ -53,8 +53,20 @@ async function getPhoto(key) {
     const q = t.objectStore(STORE).get(key);
     q.onsuccess = () => res(q.result || null);
     q.onerror = () => res(null);
+    t.onabort = () => res(null);
   });
 }
+async function clearPhotos() {
+  const d = await db();
+  return new Promise((res, rej) => {
+    const t = d.transaction(STORE, "readwrite");
+    t.objectStore(STORE).clear();
+    t.oncomplete = res; t.onerror = t.onabort = () => rej(t.error);
+  });
+}
+/* 本次打开拍下的照片也在内存里留一份。iOS 主屏应用在后台放久了会丢 IndexedDB 连接，
+   存不进去时终章照样有图可看，流程也不会卡住。 */
+const shots = {};
 
 /* ---------------------------------------------------------------- 切屏 */
 
@@ -70,6 +82,15 @@ function toast(msg, ms = 2600) {
   toast._t = setTimeout(() => { t.hidden = true; }, ms);
 }
 
+/* 靠声音带路时她不会碰屏幕，iPad 默认 2 分钟就锁屏，页面一隐藏雷达和定位全停。
+   锁屏回来 wake lock 会被系统收回，所以每次点屏都补一次。iOS 18.4 之前的主屏应用里无效，
+   兜底是把「自动锁定」设成「永不」。 */
+let wake = null;
+function keepAwake() {
+  if (!navigator.wakeLock || (wake && !wake.released)) return;
+  navigator.wakeLock.request("screen").then((l) => { wake = l; }).catch(() => {});
+}
+
 /* ---------------------------------------------------------------- 定位与实时地图 */
 
 const geo = { watch: null, ok: false, err: null, lastFix: null, trail: [], lastDraw: 0, lastTrail: 0, drawTimer: null };
@@ -83,11 +104,18 @@ function startGeo() {
 }
 
 function onGeoErr(e) {
+  // 已经拿到过定位时，偶发的「暂时定不到」（code 2/3）不作废当前位置——
+  // 不然地图会跳成以信物为中心、雷达盘变「—」，下一个点一到又跳回来。雷达自己会在断流 4 秒后静音
+  if (e.code !== 1 && geo.lastFix) { if (current === "s-map") toast(ui.noGeo, 4200); return; }
   geo.ok = false;
   // 记下来。不然重画时会被「找信号中…」盖掉——权限被拒是永远找不回来的，
   // 一直骗她在等信号，她只会一直站着等。
-  geo.err = e.code === 1 ? "没有定位权限" : "定位不可用";
-  if (current === "s-map") toast(ui.noGeo, 4200);
+  geo.err = e.code === 1 ? ui.geoDeniedShort : "定位不可用";
+  // 必须当场重画：首次进地图时 goMap 已经画出「找信号中…」，拒绝授权的回调是后来才到的
+  if (current === "s-map") {
+    toast(e.code === 1 ? ui.geoDenied : ui.noGeo, e.code === 1 ? 9000 : 4200);
+    redrawMap(radar.state);
+  }
 }
 
 function onFix(p) {
@@ -136,13 +164,14 @@ function redrawMap(s) {
     return;
   }
   map.draw({ me: geo.lastFix, trailPts: geo.trail, signal: s ? s.signal : 0 });
-  disc.update({ dist: s.dist, bearing: s.bearing, spanM: map.spanM, signal: s.signal });
-  // 地图上那枚箭头已经指明了方向，提示只补它说不了的：还有多远、是不是走对了
+  disc.update({ dist: s.dist, bearing: s.bearing, spanM: map.spanM, signal: s.signal, acc: s.acc });
+  // 地图上的箭头/别针已经指明了方向，提示只补它说不了的：还有多远、是不是走对了、信号靠不靠得住
   $("hud-hint").textContent =
-    s.dist < 60 ? "就在附近了"
+    s.dist < 60 && !s.weak ? "就在附近了"
+    : s.weak ? "信号弱，雷达先不响，看地图走"
     : s.signal > 0.5 ? "对，就是这个方向"
     : s.signal > 0 ? "差不多是这个方向"
-    : "跟着箭头走";
+    : "跟着金色标记走";
 }
 
 /* ---------------------------------------------------------------- 地图屏 */
@@ -151,6 +180,9 @@ const mapCache = new Map();
 
 async function goMap(i) {
   const st = stations[i];
+  // 解锁音频必须在第一个 await 之前，之后就不算用户手势了（iOS 杀进程重开会跳过封面，这里是第一次机会）
+  radar.unlock();
+  keepAwake();
   document.documentElement.style.setProperty("--kc", st.color);
   show("s-map");
 
@@ -185,7 +217,6 @@ async function goMap(i) {
 
   geo.trail = [];
   radar.setTarget(st.coord);
-  radar.unlock();
   radar.start();
   startGeo();
   redrawMap(radar.state);
@@ -199,9 +230,12 @@ async function startCam() {
   stopCam();
   if (!navigator.mediaDevices?.getUserMedia) { cam.err = "此环境不给摄像头"; return false; }
   try {
-    cam.stream = await navigator.mediaDevices.getUserMedia({
-      video: { facingMode: cam.facing }, audio: false,
+    // 不给分辨率 WebKit 可能按 640×480 采，纪念照放大就糊。ideal 拿不到也不报错
+    const s = await navigator.mediaDevices.getUserMedia({
+      video: { facingMode: cam.facing, width: { ideal: 1920 }, height: { ideal: 1440 } }, audio: false,
     });
+    stopCam();            // 连点「切换镜头」时先回来的那一路没人管，会一直开着
+    cam.stream = s;
   } catch (e) {
     cam.err = e.name || String(e);
     return false;
@@ -209,7 +243,8 @@ async function startCam() {
   const v = $("cam");
   v.srcObject = cam.stream;
   $("s-capture").classList.toggle("front", cam.facing === "user");
-  try { await v.play(); } catch {}
+  // 不等 play()：流拿到了却一帧不出时（相机被别的 App 占着之类），await 会一直挂着，按钮永远不出来
+  v.play().catch(() => {});
   cam.err = null;
   return true;
 }
@@ -222,9 +257,8 @@ function grabShot() {
   if (!v.videoWidth) return null;
   const c = document.createElement("canvas");
   c.width = v.videoWidth; c.height = v.videoHeight;
-  const ctx = c.getContext("2d");
-  if (cam.facing === "user") { ctx.translate(c.width, 0); ctx.scale(-1, 1); }
-  ctx.drawImage(v, 0, 0);
+  // 预览是镜像的（自拍所见即所得），存下来的照片不镜像——跟 iPad 自带相机一样，照片里的字是正的
+  c.getContext("2d").drawImage(v, 0, 0);
   return c.toDataURL("image/jpeg", 0.82);
 }
 
@@ -243,6 +277,7 @@ const QR_MIN_GAP_MS = 160;
 let qrLoop = null, qrActive = false, qrCanvas = null;
 
 function startQrScan(st) {
+  stopQrScan();           // 不先停，重复进入会叠出第二个循环
   const v = $("cam");
   if (!qrCanvas) qrCanvas = document.createElement("canvas");
   const c = qrCanvas, ctx = c.getContext("2d", { willReadFrequently: true });
@@ -257,7 +292,8 @@ function startQrScan(st) {
     last = t;
     if (!v.videoWidth) return;
 
-    const s = Math.min(v.videoWidth, v.videoHeight) * 0.75;
+    // 取短边中间一半：分辨率提上去之后仍盖得住屏幕上 42vmin 的取景框，码占的像素也多一半
+    const s = Math.min(v.videoWidth, v.videoHeight) * 0.5;
     ctx.drawImage(v, (v.videoWidth - s) / 2, (v.videoHeight - s) / 2, s, s, 0, 0, QR_SIDE, QR_SIDE);
     const img = ctx.getImageData(0, 0, QR_SIDE, QR_SIDE);
     const r = window.jsQR(img.data, QR_SIDE, QR_SIDE, { inversionAttempts: "dontInvert" });
@@ -312,30 +348,54 @@ async function goCapture(i) {
   const st = stations[i];
   state.idx = i;
   radar.stop();
+  // 每站从头来：清掉上一站的照片（不然「跳过」会把上一站的照片存成这一站的）、
+  // 镜头回到前摄（上一站为扫卡片切到了后摄）、按钮先全藏（相机起来之前别留着上一站的「跳过」）
+  cam.shot = null;
+  cam.facing = "user";
+  stopQrScan();
+  $("qr-scan").hidden = true;
+  $("shutter").hidden = true;
+  $("btn-skip").hidden = true;
+  $("btn-flip").hidden = false;
+  $("btn-back").hidden = false;
+  $("cap-tip").textContent = "";
   $("pose-k").textContent = st.kingdom;
   $("pose-t").textContent = st.pose;
-  $("qr-scan").hidden = true;
   show("s-capture");
   await openCamera();
 }
 
 /* 相机打不开不能变成死路——生日当天卡在这一屏是最坏的情况。
-   失败时一定给出两条出口：再试一次、跳过拍照继续。 */
+   失败时一定给出出口：再试一次、跳过继续、回地图。
+   扫码层开着时（拍完照、切镜头对卡片）要保住扫码层的按钮，不能复位成拍照状态——
+   否则快门露出来，她一按就把刚摆好姿势的照片换成卡片照。 */
 async function openCamera() {
   const ok = await startCam();
-  $("shutter").hidden = !ok;
-  $("btn-flip").textContent = "切换镜头";
-  $("btn-skip").hidden = true;
-  $("btn-qr").hidden = !ok || !qrReady();
-  $("btn-qr").textContent = "扫卡片";
-  if (ok) {
-    $("cap-tip").textContent = ui.shutterTip;
-  } else {
-    $("cap-tip").textContent = `相机打不开（${cam.err || "未知"}）。可以点右边「再试一次」，或者跳过拍照继续。`;
-    $("btn-flip").textContent = "再试一次";
-    $("btn-skip").hidden = false;
-    $("btn-skip").textContent = "跳过拍照，继续";
-  }
+  // 相机还在打开她就离开了（回地图、跳过）：迟到的流别开着
+  if (current !== "s-capture") { stopCam(); return; }
+  const scanning = !$("qr-scan").hidden;
+  // 倒数中不许把快门翻出来：切镜头挂起时按了快门，等新镜头起来会在倒数中途再露出快门，按两下就覆盖照片
+  $("shutter").hidden = !ok || scanning || $("s-capture").classList.contains("counting");
+  $("btn-flip").textContent = ok ? "切换镜头" : "再试一次";
+  $("btn-skip").hidden = ok && !scanning;
+  $("btn-skip").textContent = scanning ? ui.qrSkip : "跳过拍照，继续";
+  $("cap-tip").textContent = scanning ? ""
+    : ok ? ui.shutterTip
+    : `相机打不开（${cam.err || "未知"}）。可以点右边「再试一次」，或者跳过拍照继续。`;
+  if (scanning) $("qr-hint").textContent = ok ? ui.scanning : "相机打不开，点「再试一次」或者跳过";
+}
+
+/* 拍完照进扫码层。前摄是定焦超广角，卡片上的码举在正常距离只占十几个像素，基本认不出，
+   所以扫码一律切到后摄；下一站 goCapture 会切回前摄。 */
+async function enterScan(st) {
+  $("shutter").hidden = true;
+  $("btn-skip").hidden = false;
+  $("btn-skip").textContent = ui.qrSkip;
+  $("cap-tip").textContent = "";
+  $("qr-hint").textContent = ui.scanning;
+  $("qr-scan").hidden = false;
+  startQrScan(st);
+  if (cam.facing === "user") { cam.facing = "environment"; await openCamera(); }
 }
 
 function goReveal(i, photo) {
@@ -351,7 +411,9 @@ function goReveal(i, photo) {
 }
 
 async function goFinale() {
-  const photos = await Promise.all(stations.map((s) => getPhoto(s.id)));
+  if (wake) { wake.release().catch(() => {}); wake = null; }
+  // getPhoto 抛错（IndexedDB 连接丢了）也不能挡住终章
+  const photos = await Promise.all(stations.map((s) => shots[s.id] || getPhoto(s.id).catch(() => null)));
   $("fn-photos").innerHTML = stations.map((s, i) =>
     `<img src="${photos[i] || ""}" alt="${s.kingdom}">`).join("");
   $("fn-t").textContent = STORY.final.title;
@@ -364,10 +426,20 @@ async function goFinale() {
 }
 
 async function finishCapture(st) {
+  const i = stations.indexOf(st);
   const photo = cam.shot;
-  if (photo) await putPhoto(st.id, photo);
+  if (photo) {
+    shots[st.id] = photo;
+    // 存不进去就重开一次连接再试；还不行也照常往下走，照片至少这次打开还在内存里
+    try { await putPhoto(st.id, photo); }
+    catch { dbp = null; try { await putPhoto(st.id, photo); } catch {} }
+  }
+  // 这一站算做完了，进度记到下一站。不记的话：收信物页被杀进程要重拍；
+  // 走完终章隔天重开会被带回第三站，再按快门就把那天的照片覆盖了
+  state.idx = i + 1;
+  saveState();
   stopCam();
-  goReveal(stations.indexOf(st), photo);
+  goReveal(i, photo);
 }
 
 /* ---------------------------------------------------------------- 绑定 */
@@ -379,35 +451,42 @@ $("cover-btn").addEventListener("click", () => {
 
 $("clue-btn").addEventListener("click", () => goMap(state.idx));
 
+/* 任何一次点屏都顺手唤醒音频、续上 wake lock：锁屏回来后第一下触摸就能把雷达声音救回来 */
+document.addEventListener("touchend", () => {
+  radar.unlock();
+  if (current === "s-map" || current === "s-capture") keepAwake();
+}, { passive: true });
+
 $("map-cta").addEventListener("click", () => goCapture(state.idx));
 
 $("recenter").addEventListener("click", () => map?.followMe());
 
+/* 快门先倒数 3 秒：姿势都要空出手，一只手托着 iPad 按不了快门；支架 + 后摄也要靠它。
+   倒数时把按钮都收起来，顺带防连点。拍照必须在扫码之前，扫码层只在拍完之后出现。 */
 $("shutter").addEventListener("click", async () => {
+  const st = stations[state.idx];
+  const busy = ["shutter", "btn-flip", "btn-back"];
+  busy.forEach((id) => { $(id).hidden = true; });
+  $("s-capture").classList.add("counting");
+  for (const n of ["3", "2", "1"]) {
+    $("pose-t").textContent = n;
+    await new Promise((r) => setTimeout(r, 1000));
+    if (current !== "s-capture") break;
+  }
+  $("s-capture").classList.remove("counting");
+  $("pose-t").textContent = st.pose;
+  busy.forEach((id) => { $(id).hidden = false; });
+  if (current !== "s-capture") return;
   cam.shot = grabShot();
-  if (!cam.shot) return;
-  const st = stations[state.idx];
-  const needQr = qrReady() && !state.qr[st.id];
-  if (!needQr) { finishCapture(st); return; }
-  $("shutter").hidden = true;
-  $("btn-qr").hidden = true;
-  $("btn-skip").hidden = false;
-  $("qr-skip-label") && ($("qr-skip-label").textContent = ui.qrSkip);
-  $("btn-skip").textContent = ui.qrSkip;
-  $("qr-hint").textContent = ui.scanning;
-  $("qr-scan").hidden = false;
-  startQrScan(st);
-});
-
-$("btn-qr").addEventListener("click", () => {
-  const st = stations[state.idx];
-  $("shutter").hidden = true;
-  $("btn-qr").hidden = true;
-  $("btn-skip").hidden = false;
-  $("btn-skip").textContent = ui.qrSkip;
-  $("qr-hint").textContent = ui.scanning;
-  $("qr-scan").hidden = false;
-  startQrScan(st);
+  if (!cam.shot) {
+    // 画面一直不来就给出口，不能只剩一个按了没用的快门
+    $("btn-skip").hidden = false;
+    $("btn-skip").textContent = "跳过拍照，继续";
+    toast("画面没出来：点「切换镜头」重开相机，或者跳过", 3800);
+    return;
+  }
+  if (qrReady() && !state.qr[st.id]) enterScan(st);
+  else finishCapture(st);
 });
 
 $("btn-skip").addEventListener("click", () => {
@@ -417,32 +496,65 @@ $("btn-skip").addEventListener("click", () => {
 });
 
 $("btn-flip").addEventListener("click", async () => {
-  if (!cam.stream) { await openCamera(); return; }
-  cam.facing = cam.facing === "user" ? "environment" : "user";
+  if (cam.stream) cam.facing = cam.facing === "user" ? "environment" : "user";
   await openCamera();
 });
 
+/* 「我到了，拍照」点早了得能回去：线索原文和雷达都在地图屏 */
+$("btn-back").addEventListener("click", () => {
+  stopQrScan();
+  stopCam();
+  $("qr-scan").hidden = true;
+  goMap(state.idx);
+});
+
 $("rv-btn").addEventListener("click", () => {
-  const next = state.idx + 1;
-  if (next < stations.length) goClue(next);
+  if (state.idx < stations.length) goClue(state.idx);   // finishCapture 已经把进度记到下一站
   else goFinale();
 });
 
 $("fn-btn").addEventListener("click", () => { $("letter").hidden = false; });
 $("letter-close").addEventListener("click", () => { $("letter").hidden = true; });
 
+/* 清空进度：连点标题 5 下。作者在她 iPad 上彩排完要用它——不清的话，生日当天一打开
+   就是彩排停下的那一站，扫码也被当成扫过了。挂在封面、线索页、终章的大标题上：
+   重开应用只会落在这三屏之一。 */
+let resetTaps = 0, resetAt = 0;
+async function resetTap() {
+  const now = Date.now();
+  resetTaps = now - resetAt < 1500 ? resetTaps + 1 : 1;
+  resetAt = now;
+  if (resetTaps < 5) return;
+  resetTaps = 0;
+  if (!confirm("清空进度和照片，从封面重新开始？")) return;
+  try { localStorage.removeItem(SAVE_KEY); } catch {}
+  try { await clearPhotos(); } catch {}
+  location.reload();
+}
+["cover-t", "clue-t", "fn-t"].forEach((id) => $(id).addEventListener("click", resetTap));
+
 document.addEventListener("visibilitychange", () => {
-  if (document.hidden) radar.stop();
-  else if (current === "s-map") radar.start();
+  if (document.hidden) { radar.stop(); return; }
+  if (current === "s-map") { radar.unlock(); radar.start(); keepAwake(); }
+  // 从后台切回来不算导航，浏览器不会自己去查新版
+  navigator.serviceWorker?.getRegistration().then((r) => r && r.update()).catch(() => {});
 });
 
 /* ---------------------------------------------------------------- 启动 */
 
 loadState();
-if (state.idx > 0) goClue(Math.min(state.idx, stations.length - 1));
+if (state.idx >= stations.length) goFinale();
+else if (state.idx > 0) goClue(state.idx);
 else goCover();
 
 if ("serviceWorker" in navigator && location.protocol.startsWith("http")) {
+  /* 缓存优先的代价：新版装好了，这次打开的页面还是旧模块渲染的。
+     停在封面或线索页（没在走、没在拍）时自动刷新一次，改了线索和信件打开一次就能生效。
+     首次安装没有 controller，不刷新；刷新后 controller 不再变，不会循环。 */
+  const had = !!navigator.serviceWorker.controller;
+  navigator.serviceWorker.addEventListener("controllerchange", () => {
+    if (had && (current === "s-cover" || current === "s-clue")) location.reload();
+  });
   window.addEventListener("load", () => {
     navigator.serviceWorker.register("./sw.js").catch(() => {});
   });

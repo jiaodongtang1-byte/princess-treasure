@@ -150,8 +150,8 @@ html, body {
 
 .cn { position: absolute; width: 6vmin; height: 6vmin; border: 2.5px solid rgba(255,255,255,.5);
       z-index: 5; pointer-events: none; }
-.c1 { top: 9vmin; left: 8vmin; border-right: 0; border-bottom: 0; border-radius: 8px 0 0 0; }
-.c2 { top: 9vmin; right: 8vmin; border-left: 0; border-bottom: 0; border-radius: 0 8px 0 0; }
+.c1 { top: 11vmin; left: 8vmin; border-right: 0; border-bottom: 0; border-radius: 8px 0 0 0; }
+.c2 { top: 11vmin; right: 8vmin; border-left: 0; border-bottom: 0; border-radius: 0 8px 0 0; }
 .c3 { bottom: 22vmin; left: 8vmin; border-right: 0; border-top: 0; border-radius: 0 0 0 8px; }
 .c4 { bottom: 22vmin; right: 8vmin; border-left: 0; border-top: 0; border-radius: 0 0 8px 0; }
 
@@ -178,6 +178,11 @@ html, body {
         z-index: 6; font-family: var(--sans); }
 .pill[hidden] { display: none; }
 .pill.left { left: var(--padl); }
+/* 回地图是次要操作，放左上角，不跟快门抢拇指 */
+.pill.top { top: var(--pad); bottom: auto; left: var(--padl); }
+
+/* 倒数时数字放大 */
+#s-capture.counting .pose-t { font: 600 calc(var(--t-cover) * 2.6)/1 var(--mono); margin-top: 6vmin; }
 .pill.right { right: var(--padr); }
 
 /* 扫码模式：取景框盖住中间 */

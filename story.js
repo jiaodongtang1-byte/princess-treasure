@@ -102,6 +102,8 @@ export const STORY = {
     qrFail: "没认出来，再靠近一点、对准一点",
     noCamera: "打不开摄像头",
     noGeo: "拿不到定位——雷达先不响了，线索照样能走",
+    geoDeniedShort: "定位没打开",
+    geoDenied: "定位被拒绝了：去「设置」里允许定位，再把寻宝书从后台划掉重新打开，进度不会丢",
   },
 };
 

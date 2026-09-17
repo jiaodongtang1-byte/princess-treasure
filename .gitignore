@@ -18,6 +18,7 @@ shot.mjs
 walkthrough.mjs
 radar-test.mjs
 decode-test.mjs
+flow-test.mjs
 probe-*.mjs
 app-*.png
 scr-*.png
