@@ -176,6 +176,7 @@ function hudText(s) {
   if (!geo.ok || !s) return geo.err || "找信号中…";
   // 上千米的误差 = 没开精确位置，这个她自己能修
   if (s.acc > 1000) return `只拿到大概位置（±${Math.round(s.acc)} 米）：去设置里打开「精确位置」`;
+  if (s.stale) return "定位停了一下，站着等几秒，或者往前走两步";
   if (s.mode === "near") return "就在附近了，慢慢找";
   if (s.mode === "sweep") return s.signal > 0 ? "就是这个方向，朝它走过去" : "再慢慢转一转，对准了会响";
   if (s.mode === "walk") return s.signal > 0.5 ? "对，就是这个方向" : s.signal > 0 ? "差不多是这个方向" : "方向不对，停下来转一转找找";
@@ -369,7 +370,7 @@ function goClue(i) {
   $("clue-btn").textContent = ui.clueButton;
   // iOS 出发时会弹「运动与方向」授权，先打个招呼，免得她顺手点了取消
   $("clue-fl").textContent =
-    typeof window.DeviceOrientationEvent?.requestPermission === "function" && radar.sensorPerm !== "granted"
+    typeof window.DeviceOrientationEvent?.requestPermission === "function" && radar.sensorPerm === "unknown"
       ? ui.sensorHint : "";
   show("s-clue");
 }

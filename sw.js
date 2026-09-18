@@ -1,6 +1,6 @@
 /* 缓存优先：装到主屏之后，断网也能翻完整本书（照片和进度本来就在本机）。
    改了文件记得把 VERSION 加一，否则老缓存会被继续用。 */
-const VERSION = "p41-v8";
+const VERSION = "p41-v9";
 
 const SHELL = [
   "./",

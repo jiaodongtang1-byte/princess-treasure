@@ -504,7 +504,8 @@ export function createMap(mount, geo, target) {
     <path d="M -3.5 -6 L 5 0 L -3.5 6 Z" fill="${GOLD}"/>`;
 
   // 当前国度的塔：单座、不对称（旗子偏一边）、上方不画光弧——通用童话元素，不是哪家的城堡标志。
-  // 屏幕坐标、大小恒定，立在领地圈最北点
+  // 屏幕坐标、大小恒定，立在领地圈最北点 → 所以只在她位于信物北侧时进画面（横屏约 150~620 米，
+  // 竖屏 40~900 米）；贴近信物时由领地圈底色和国度色的花接替。出画是地图常态，不是坏了
   const tower = el("g", { class: "tower" });
   tower.innerHTML = `<path d="M-8 0V-26H8V0Z" fill="#FFFBF4" stroke="#B79C7E" stroke-width="1.6" stroke-linejoin="round"/>
     <path d="M-11 -26L0 -46L11 -26Z" fill="${KC}" fill-opacity=".38" stroke="#B79C7E" stroke-width="1.6" stroke-linejoin="round"/>

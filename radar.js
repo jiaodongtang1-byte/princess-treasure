@@ -54,16 +54,19 @@ const GNSS_WALK_SPEED = 0.6;                 // coords.speed 过这个也算在�
 // 朝哪边
 const COMPASS_MAX_ERR = 30;                  // webkitCompassAccuracy 超过这么多度就不信
 const COMPASS_MAX_AGE = 500;
-const MAX_TILT = 65;                         // 离水平面超过这个角度（竖着举）罗盘指向没准，不用
+// 离水平面超过这个角度（竖着举）罗盘指向没准。要迟滞：65° 正是端着 iPad 看地图的角度，
+// 单阈值会让朝向扇形每秒闪几次、HUD 一秒一换
+const TILT_IN = 65, TILT_OUT = 72;
 const GNSS_HEADING_SPEED = 0.8;              // 走得比这快，coords.heading 才靠得住
 const FIX_MAX_AGE = 2500;                    // coords.speed / heading 过了这么久就不算数
 const POS_MAX_AGE = 15000;                   // 位置旧到这个程度，方位角已经不可信
 
-// 离得太近时方位角不可靠（误差半径跟距离一个量级），只按距离滴
-const NEAR_MIN = 40, NEAR_ACC_K = 3;
+// 离得太近时方位角不可靠（误差半径跟距离一个量级），只按距离滴。
+// 必须封顶：不封的话精度 150 米时 450 米外就进「不看方向、走就滴」，背对礼物也照样急滴
+const NEAR_MIN = 40, NEAR_ACC_K = 3, NEAR_MAX = 150;
 
 // 原地转身找方向
-const SWEEP_TURN = 15;                       // 转过这么多度算「在找方向」
+const SWEEP_TURN = 30;                       // 转过这么多度算「在找方向」。15° 时站着的身体摆动就能一直武装它
 const SWEEP_HOLD_MS = 5000;                  // 停止转动这么久后安静，「站着不动不响」大多数时候仍然成立
 const SWEEP_IN = 25, SWEEP_OUT = 35;         // 朝向进入 ±25° 开始响，离开 ±35° 才停（迟滞，别在边上来回跳）
 const SWEEP_SLOW = 900, SWEEP_FAST = 150;
@@ -120,7 +123,7 @@ export function createRadar() {
   const sens = {
     perm: "unknown", on: false,
     heading: null, headingT: 0, err: -1,     // 屏幕上方朝哪（度，磁北≈真北，成都磁偏角 2.4° 忽略）
-    tilt: null,                              // 离水平面多少度
+    tilt: null, tiltOk: true,                // 离水平面多少度、当前算不算「能用罗盘的姿势」
     steps: [], above: false, lastStep: 0, motionT: 0,
     anchor: null, turnT: -1e9,               // 上次转过 SWEEP_TURN 度的时刻
     sweepOn: false,
@@ -177,6 +180,7 @@ export function createRadar() {
     removeEventListener("deviceorientationabsolute", onOrient);
     removeEventListener("devicemotion", onMotion);
     sens.heading = null; sens.steps.length = 0; sens.sweepOn = false;
+    sens.anchor = null; sens.turnT = -1e9;   // 不清的话回来第一帧的罗盘读数会被当成「刚转过身」
   }
 
   /* 必须在点击回调里同步调用（前面不能有 await）：iOS 要用户手势才弹「运动与方向」授权。
@@ -188,7 +192,7 @@ export function createRadar() {
       if (running) attach();
       return;
     }
-    if (sens.perm === "granted") return;
+    if (sens.perm !== "unknown") return;     // 问过就别再问：被拒后每次进地图都弹一次提示，等于糊住地图
     ask.call(window.DeviceOrientationEvent).then((r) => {
       sens.perm = r;
       if (r === "granted") { if (running) attach(); }
@@ -242,30 +246,30 @@ export function createRadar() {
   function evaluate(now) {
     const s = state;
     if (!s) return null;
+    sens.tiltOk = sens.tilt === null || sens.tilt < (sens.tiltOk ? TILT_OUT : TILT_IN);
     const compassOk = sens.heading !== null && now - sens.headingT <= COMPASS_MAX_AGE
-      && sens.err <= COMPASS_MAX_ERR && (sens.tilt === null || sens.tilt < MAX_TILT);
+      && sens.err <= COMPASS_MAX_ERR && sens.tiltOk;
     const fixFresh = now - s.t <= FIX_MAX_AGE;
     const posOk = now - s.t <= POS_MAX_AGE;
     const diffOk = !s.weak && now - s.t <= STALE_MS && s.speed >= STILL_SPEED && s.moved >= MIN_MOVED;
 
-    // 在不在走：计步在工作就信计步（加 GNSS 速度兜底）；没有计步就看 GNSS 速度；再没有就看位置差分
-    const stepping = now - sens.motionT < 1000;
+    // 在不在走：三路取或，谁看见了都算。写成「有计步就只信计步」的阶梯会把位置差分变成死代码——
+    // 她双手抱着 iPad 走路时机身把步态阻尼掉，计步数不到，整条腿就一声不响（审查实测）
     const gnssWalk = fixFresh && s.gSpeed != null && s.gSpeed >= GNSS_WALK_SPEED;
-    const moving = stepping ? sens.steps.length >= 2 || gnssWalk
-      : s.gSpeed != null && fixFresh ? gnssWalk
-      : diffOk;
+    const moving = sens.steps.length >= 2 || gnssWalk || diffOk;
 
     // 朝哪边：罗盘 → GNSS 航向 → 位置差分
     let cos = null;
     if (compassOk) cos = Math.cos((s.bearing - sens.heading) * RAD);
     else if (fixFresh && s.gHeading != null && s.gSpeed >= GNSS_HEADING_SPEED) cos = Math.cos((s.bearing - s.gHeading) * RAD);
-    else if (diffOk) cos = s.cos;
+    else if (diffOk) cos = s.cos;      // diffOk 里已经含 speed / moved / 精度三道门槛
 
-    const nearR = Math.max(NEAR_MIN, NEAR_ACC_K * (s.acc || 0));
+    const nearR = clamp(NEAR_ACC_K * (s.acc || 0), NEAR_MIN, NEAR_MAX);
     s.facing = compassOk ? sens.heading : null;
     s.canSweep = compassOk;
     s.beat = 0; s.signal = 0; s.weakBeat = false;
 
+    s.stale = !posOk;                  // 位置太旧，方位角已经不可信：HUD 要说实话，别再请她转圈
     if (!posOk) {
       s.mode = "idle";
     } else if (s.dist < nearR) {

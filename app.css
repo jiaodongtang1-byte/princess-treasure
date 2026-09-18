@@ -110,7 +110,9 @@ html, body {
 /* 四边积色（像水彩纸边缘积下的颜料）：固定层，不跟地图平移缩放。
    用四条边带渐变，不用整屏 radial-gradient——WebKit 测试台拖图时后者每帧多 18 ms，边带多 6 ms；
    整屏纸纹噪点也试过，多 18 ms，没留。will-change 让 iOS 把它单独放一层合成（测试台是软件合成，量不出）。
-   ⚠️ 真机拖图若掉帧，先删这一整条规则再比。
+   ⚠️ 真机拖图若掉帧：这条边带在测试台只占约 6%（删掉它能排掉 iOS 上的合成层代价，测试台量不出），
+   主因更可能是水彩皮肤本身的几何（测试台每帧 64→75 ms，path 数据从 0.2 MB 涨到 1.4 MB）——
+   要动就按图层逐个关 gWorld 的子组来比。
    ⚠️ 地图 SVG 及其祖先上一个 filter / mix-blend-mode 都不许挂（WebKit 会糊、会整图消失）。 */
 .map-mount::after { content: ""; position: absolute; inset: 0; pointer-events: none; will-change: transform;
   background:
