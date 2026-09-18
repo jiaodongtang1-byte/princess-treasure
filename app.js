@@ -19,7 +19,7 @@ let state = { idx: 0, qr: {} };
 function loadState() {
   try {
     const s = JSON.parse(localStorage.getItem(SAVE_KEY) || "null");
-    if (s && typeof s.idx === "number") state = { idx: s.idx, qr: s.qr || {} };
+    if (s && typeof s.idx === "number") state = { idx: s.idx, qr: s.qr || {}, tip: s.tip };
   } catch {}
 }
 function saveState() {
@@ -75,8 +75,12 @@ function show(id) {
   document.querySelectorAll(".screen").forEach((s) => s.classList.toggle("on", s.id === id));
   // 切屏不换 URL，手机的返回手势默认会直接退出整本书。每切一屏推一条 history，
   // 返回时由下面的 popstate 走 BACK 表。popping 期间不推，否则自己勾自己
-  if (current && id !== current && !popping) history.pushState({ id }, "");
+  // 启动时落在线索页或终章（她上次走到那儿）也要压一条，不然第一次按返回直接退出整本书。
+  // 封面是第一页，那里按返回就该离开，不压
+  if ((current || id !== "s-cover") && id !== current && !popping) history.pushState({ id }, "");
   current = id;
+  // 进度条只在站着不动的三屏出现：封面是入口，地图和拍照屏要留给走路和取景
+  $("steps").hidden = !(id === "s-clue" || id === "s-reveal" || id === "s-finale");
   // 新版装好时她正在地图上走：那一次 controllerchange 已经过去，不会再有第二次。补在这儿刷
   if (swPending && (id === "s-cover" || id === "s-clue")) location.reload();
 }
@@ -106,6 +110,14 @@ function startGeo() {
   geo.watch = navigator.geolocation.watchPosition(onFix, onGeoErr, {
     enableHighAccuracy: true, maximumAge: 0, timeout: 25000,
   });
+}
+
+/* 走完了就把 GNSS 关掉：当天「自动锁定」要设成永不，高精度 watch 一直开着白耗一下午的电。
+   只在终章收——中途换站收的话，每次回地图都要等 1~2 秒首个定位点，地图先空着，反而更糟 */
+function stopGeo() {
+  if (geo.watch === null) return;
+  navigator.geolocation.clearWatch(geo.watch);
+  geo.watch = null;
 }
 
 function onGeoErr(e) {
@@ -349,9 +361,36 @@ function stopQrScan() {
   qrLoop = null;
 }
 
+/* 走到第几站。点一下直接换站——不弹确认：她要的就是能自己调，
+   再加一道「确定吗」等于把出口又关上一半。误点的代价是回到某一站的线索页，
+   照片按站存在 IndexedDB 里，不会因为换站丢。 */
+function buildSteps() {
+  const el = $("steps");
+  const fin = `<button data-i="${stations.length}" class="fin" aria-label="终章">终</button>`;
+  el.innerHTML = stations
+    .map((s, i) => `<button data-i="${i}" aria-label="${s.kingdom}">${emblemSvg(s.emblem, s.color)}</button>`)
+    .concat(fin).join('<i class="sep"></i>');
+  el.addEventListener("click", (e) => {
+    const b = e.target.closest("button");
+    if (!b) return;
+    const i = +b.dataset.i;
+    stopQrScan(); stopCam();
+    $("qr-scan").hidden = true;
+    if (i >= stations.length) { state.idx = stations.length; saveState(); goFinale(); }
+    else goClue(i);
+  });
+}
+function markSteps(i) {
+  $("steps").querySelectorAll("button").forEach((b) => b.classList.toggle("on", +b.dataset.i === i));
+}
+
 /* ---------------------------------------------------------------- 六屏 */
 
+/* 雷达只在地图屏该响。离开地图的出口有好几个（「← 线索」、顶上那排纹章、手机的返回手势），
+   停雷达收在这两个落点上，比在每个出口各写一遍可靠——上线后就漏过一次：
+   用返回手势回线索页，雷达还在滴，她会当成这声音还在指路。stop() 本身幂等 */
 function goCover() {
+  radar.stop();
   $("cover-em").innerHTML = stations
     .map((s) => emblemSvg(s.emblem, s.color)).join('<span class="sep"></span>');
   $("cover-k").textContent = STORY.cover.kicker;
@@ -360,9 +399,29 @@ function goCover() {
   $("cover-btn").textContent = STORY.cover.button;
   $("cover-fl").textContent = STORY.cover.footer;
   show("s-cover");
+  playIntro();
+}
+
+/* 开场：纸透亮、金框收进来、三枚纹章一笔一笔描出来、字逐行落下，约 2.8 秒。
+   一次打开只放一次（从线索页退回封面不重放，那时她要的是按钮不是演出）；
+   点屏幕任意处立刻跳过；系统里开了「减弱动态效果」就整段不放。 */
+let introShown = false;
+function playIntro() {
+  // 只记在内存里，不进存档：进存档的话「彩排完清进度」那一次 reload 就把动画用掉了，
+  // 她生日当天第一次打开反而没有开场。冷启动重放的代价只是 2.8 秒，而且点一下就跳过
+  if (introShown || matchMedia("(prefers-reduced-motion: reduce)").matches) return;
+  introShown = true;
+  const el = $("s-cover");
+  $("op-wish").textContent = STORY.cover.wish;
+  $("opening").hidden = false;
+  el.classList.add("intro");
+  const end = () => { el.classList.remove("intro"); $("opening").hidden = true; };
+  setTimeout(end, 9900);
+  el.addEventListener("click", end, { once: true });
 }
 
 function goClue(i) {
+  radar.stop();
   const st = stations[i];
   state.idx = i; saveState();
   document.documentElement.style.setProperty("--kc", st.color);
@@ -378,6 +437,9 @@ function goClue(i) {
     typeof window.DeviceOrientationEvent?.requestPermission === "function" && radar.sensorPerm === "unknown"
       ? ui.sensorHint : "";
   show("s-clue");
+  markSteps(i);
+  // 那排纹章没有文字，不说她不会去点。说过一次就记下来，不再打扰
+  if (!state.tip) { state.tip = 1; saveState(); toast("顶上那排小图标，点一下可以换站", 4600); }
 }
 
 async function goCapture(i) {
@@ -395,10 +457,16 @@ async function goCapture(i) {
   $("btn-flip").hidden = false;
   $("btn-back").hidden = false;
   $("cap-tip").textContent = "";
+  // 上一轮的倒数没跑完她就走了（倒数时快门和「回地图」都藏着，返回手势是唯一出口）：
+  // 不清的话新会话顶着大号数字进来，快门被 openCamera 判死，等于卡在一个按不了的拍照屏
+  $("s-capture").classList.remove("counting");
   $("pose-k").textContent = st.kingdom;
   $("pose-t").textContent = st.pose;
   show("s-capture");
   await openCamera();
+  // 她从进度条跳回已经拍过的站：先说一声，不然按下快门就把原来那张静默换掉了
+  if (current === "s-capture" && (shots[st.id] || await getPhoto(st.id).catch(() => null)))
+    toast("这一站你已经拍过了，再按快门会换掉那张照片", 4200);
 }
 
 /* 相机打不开不能变成死路——生日当天卡在这一屏是最坏的情况。
@@ -444,21 +512,27 @@ function goReveal(i, photo) {
   $("rv-d").textContent = st.relicText;
   $("rv-btn").textContent = last ? ui.revealLastButton : ui.revealButton;
   show("s-reveal");
+  markSteps(i);                        // 高亮刚收下的这一件，不是 state.idx（那已经指向下一站）
 }
 
 async function goFinale() {
   if (wake) { wake.release().catch(() => {}); wake = null; }
-  // getPhoto 抛错（IndexedDB 连接丢了）也不能挡住终章
-  const photos = await Promise.all(stations.map((s) => shots[s.id] || getPhoto(s.id).catch(() => null)));
-  $("fn-photos").innerHTML = stations.map((s, i) =>
-    `<img src="${photos[i] || ""}" alt="${s.kingdom}">`).join("");
+  radar.stop();
+  stopGeo();
   $("fn-t").textContent = STORY.final.title;
   $("fn-d").textContent = STORY.final.body;
   $("fn-btn").textContent = STORY.final.button;
   $("letter-body").textContent = STORY.final.letter;
   $("letter").hidden = true;
+  // 先把终章摆出来（空相框），照片再从 IndexedDB 慢慢填：读三张 dataURL 要时间，
+  // 等读完再切屏的话她点了「终」会对着上一屏干等
+  $("fn-photos").innerHTML = stations.map((s) => `<img alt="${s.kingdom}">`).join("");
   show("s-finale");
-  radar.stop();
+  markSteps(stations.length);
+  // getPhoto 抛错（IndexedDB 连接丢了）也不能挡住终章
+  const photos = await Promise.all(stations.map((s) => shots[s.id] || getPhoto(s.id).catch(() => null)));
+  if (current !== "s-finale") return;
+  $("fn-photos").querySelectorAll("img").forEach((img, i) => { if (photos[i]) img.src = photos[i]; });
 }
 
 async function finishCapture(st) {
@@ -475,7 +549,8 @@ async function finishCapture(st) {
   state.idx = i + 1;
   saveState();
   stopCam();
-  goReveal(i, photo);
+  // 跳回已经拍过的这一站、又按了「跳过拍照」：把原来那张取回来，别摆一张空相框说「她拍的那张」
+  goReveal(i, photo || shots[st.id] || await getPhoto(st.id).catch(() => null));
 }
 
 /* ---------------------------------------------------------------- 绑定 */
@@ -507,12 +582,13 @@ $("shutter").addEventListener("click", async () => {
   for (const n of ["3", "2", "1"]) {
     $("pose-t").textContent = n;
     await new Promise((r) => setTimeout(r, 1000));
-    if (current !== "s-capture") break;
+    // .counting 就是「这一轮倒数」的令牌：她中途回地图又点回来时 goCapture 会清掉它，
+    // 旧循环认出自己过期就直接撤——不能往下走，那会替她按下快门、还把新会话的按钮和文案改回去
+    if (current !== "s-capture" || !$("s-capture").classList.contains("counting")) return;
   }
   $("s-capture").classList.remove("counting");
   $("pose-t").textContent = st.pose;
   busy.forEach((id) => { $(id).hidden = false; });
-  if (current !== "s-capture") return;
   cam.shot = grabShot();
   if (!cam.shot) {
     // 画面一直不来就给出口，不能只剩一个按了没用的快门
@@ -535,6 +611,9 @@ $("btn-flip").addEventListener("click", async () => {
   if (cam.stream) cam.facing = cam.facing === "user" ? "environment" : "user";
   await openCamera();
 });
+
+/* 走到一半想重看线索原文、或者发现走错站了 */
+$("map-back").addEventListener("click", () => goClue(state.idx));
 
 /* 「我到了，拍照」点早了得能回去：线索原文和雷达都在地图屏 */
 $("btn-back").addEventListener("click", () => {
@@ -593,6 +672,7 @@ document.addEventListener("visibilitychange", () => {
 /* ---------------------------------------------------------------- 启动 */
 
 loadState();
+buildSteps();
 if (state.idx >= stations.length) goFinale();
 else if (state.idx > 0) goClue(state.idx);
 else goCover();

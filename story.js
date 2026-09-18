@@ -11,6 +11,7 @@ export const STORY = {
     sub: "十月九日 · 三个国度 · 三件信物",
     button: "翻 开",
     footer: "写给 2026 年 10 月 9 日的你",
+    wish: "生日快乐",                    // 开场片段里蜡烛点亮时浮出来的那一行
   },
 
   /* ⚠️ 第 2、3 站的线索、姿势、信物目前是**占位内容**——为的是让流程能顺着走完。
@@ -110,14 +111,19 @@ export const STORY = {
 };
 
 /* 图标：名字 → SVG 内容。只给描边，颜色由外面传。 */
+/* ⚠️ 每条路径都带 pathLength="150"：封面开场那段描边动画用 stroke-dasharray: 150 统一驱动，
+   不归一化的话短路径（书脊那条只有 20 个单位）一瞬间就描完、长的（钟面那圈 97）还在慢慢画，
+   三枚纹章看着像各画各的。加新纹章时照着带上这个属性。 */
 export const EMBLEM = {
-  clock: '<circle cx="24" cy="26" r="15.5"/><path d="M24 10.5 V26" stroke-width="2.9" stroke-linecap="round"/><path d="M24 26 L30.6 19.4" stroke-width="1.7" stroke-linecap="round"/>',
-  rose: '<circle cx="24" cy="14.5" r="6"/><circle cx="33.5" cy="21.5" r="6"/><circle cx="29.9" cy="32.5" r="6"/><circle cx="18.1" cy="32.5" r="6"/><circle cx="14.5" cy="21.5" r="6"/><circle cx="24" cy="24.5" r="3.4" fill="currentColor" stroke="none"/>',
-  book: '<path d="M24 15.5 C20 12.4 12.5 12.2 8.5 14 V34.5 C12.5 32.7 20 32.9 24 36 C28 32.9 35.5 32.7 39.5 34.5 V14 C35.5 12.2 28 12.4 24 15.5 Z"/><path d="M24 15.5 V36"/>',
+  clock: '<circle cx="24" cy="26" r="15.5" pathLength="150"/><path d="M24 10.5 V26" pathLength="150" stroke-width="2.9" stroke-linecap="round"/><path d="M24 26 L30.6 19.4" pathLength="150" stroke-width="1.7" stroke-linecap="round"/>',
+  rose: '<circle cx="24" cy="14.5" r="6" pathLength="150"/><circle cx="33.5" cy="21.5" r="6" pathLength="150"/><circle cx="29.9" cy="32.5" r="6" pathLength="150"/><circle cx="18.1" cy="32.5" r="6" pathLength="150"/><circle cx="14.5" cy="21.5" r="6" pathLength="150"/><circle cx="24" cy="24.5" r="3.4" fill="currentColor" stroke="none"/>',
+  book: '<path d="M24 15.5 C20 12.4 12.5 12.2 8.5 14 V34.5 C12.5 32.7 20 32.9 24 36 C28 32.9 35.5 32.7 39.5 34.5 V14 C35.5 12.2 28 12.4 24 15.5 Z" pathLength="150"/><path d="M24 15.5 V36" pathLength="150"/>',
 };
 
+/* color 必须给：蔷薇的花心是 fill="currentColor"，不给的话它继承 body 的墨色，
+   粉色花瓣中间蹲一个深灰点——开场动画里花心比花瓣早一秒出来，那个孤点尤其显眼 */
 export function emblemSvg(key, color, cls) {
-  return `<svg viewBox="0 0 48 48" fill="none" stroke="${color}" stroke-width="1.7"`
+  return `<svg viewBox="0 0 48 48" fill="none" stroke="${color}" color="${color}" stroke-width="1.7"`
     + ` stroke-linejoin="round"${cls ? ` class="${cls}"` : ""}>${EMBLEM[key] || ""}</svg>`;
 }
 

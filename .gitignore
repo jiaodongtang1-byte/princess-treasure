@@ -33,6 +33,9 @@ map-*.png
 land/
 port/
 map-visual.mjs
+intro-shot.mjs
+intro-*.png
+steps-*.png
 shot-map2.mjs
 gesture-test.mjs
 gesture*.png
