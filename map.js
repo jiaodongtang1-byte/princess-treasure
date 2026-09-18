@@ -15,32 +15,59 @@
 const NS = "http://www.w3.org/2000/svg";
 const W = 1000, H = 750;              // viewBox 的基准宽高（高度每帧按屏幕比例重算）
 const GOLD = "#B8912F";
+const PAPER = "#F7EEDD";              // 地面：绘本扉页的纸色。标签光晕跟它同色，否则字周围一圈色块
 
-/* 路一律比地亮（白），描边比地深。把路的填充设成跟底色接近的米色，路就整个消失了。 */
+/* 纸上水彩绘本。水彩感拆成几样廉价近似，一个 filter 都不用（WebKit 里 filter 会糊、会整图消失）：
+   边缘积色 = 比填充深的半透明描边；罩染 = 同一块几何错位再画一遍；纸 = 地面上几百块淡色水渍 + 四边积色。
+   没做纸纹噪点：整屏噪点固定层在 WebKit 测试台上拖图每帧多 18 ms（软件合成，真机未测）。
+   路一律比地亮（白），描边比地深。把路的填充设成跟底色接近的米色，路就整个消失了。
+   [正则, 路宽, 填充, 外边, 外边宽, 虚线] ——步行道没有填充，画成一串圆点小径 */
 const ROAD = [
-  [/^(motorway|trunk)$/,                         7.5, "#FFFFFF", "#C2A874", 2.4],
-  [/^(primary)$/,                                6.4, "#FFFFFF", "#C6AD7C", 2.2],
-  [/^(secondary)$/,                              5.2, "#FFFFFF", "#CCB78C", 2.0],
-  [/^(tertiary)$/,                               4.0, "#FFFFFF", "#D2C09A", 1.7],
-  [/^(residential|unclassified|living_street)$/, 2.7, "#FFFFFF", "#D8C9A8", 1.3],
-  [/^(pedestrian|service)$/,                     2.1, "#FFFDF7", "#DCCFB2", 1.1],
-  [/^(footway|path|cycleway|steps)$/,            1.2, null,      "#D3C6AA", 0.9],
+  [/^(motorway|trunk)$/,                         7.5, "#FFFDF8", "#C4A77A", 2.4],
+  [/^(primary)$/,                                6.4, "#FFFDF8", "#C4A77A", 2.2],
+  [/^(secondary)$/,                              5.2, "#FFFDF8", "#C4A77A", 2.0],
+  [/^(tertiary)$/,                               4.0, "#FFFDF8", "#C4A77A", 1.7],
+  [/^(residential|unclassified|living_street)$/, 2.7, "#FFFDF8", "#D2BC98", 1.3],
+  [/^(pedestrian|service)$/,                     2.1, "#FFFDF8", "#D2BC98", 1.1],
+  [/^(footway|path|cycleway)$/,                  2.2, null,      "#C3AC84", 0, "0.1 5.5"],
+  [/^(steps)$/,                                  2.6, null,      "#BFA67C", 0, "2.2 2"],
 ];
-const BUILDING_FILL = ["#DFCDB0", "#D8C4A4", "#D2BD9B"];
+const BUILDING_FILL = ["#EBD9C3", "#EAD3CC", "#E4D5E4"];   // 第三色偏丁香紫，不用灰蓝——灰蓝的楼会被读成水面
+const GREEN = { park: "#CFE3C0", forest: "#BFD9AE", grass: "#DCEBCB" };
 
 function roadStyle(h) {
-  for (const [re, w, fill, stroke, sw] of ROAD) if (re.test(h)) return { w, fill, stroke, sw };
+  h = h.replace(/_link$/, "");                   // 匝道按主路画，原先整条被丢掉
+  for (let i = 0; i < ROAD.length; i++) {
+    const [re, w, fill, stroke, sw, dash] = ROAD[i];
+    if (re.test(h)) return { i, w, fill, stroke, sw, dash };
+  }
   return null;
+}
+// proposed 是没建成的线（34.9 公里穿城），platform 是站台面——都不该画成轨道
+const RAILS = /^(rail|light_rail|subway|tram|narrow_gauge|monorail)$/;
+
+/* 种子伪随机（mulberry32）：每站重建地图时，树和花长在同一个地方，不跳位 */
+function rng(seed) {
+  let a = seed >>> 0;
+  return () => {
+    a = (a + 0x6D2B79F5) >>> 0;
+    let t = Math.imul(a ^ (a >>> 15), a | 1);
+    t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
 }
 
 /* 名字的优先级与样式。0 最先抢位置——抢不到就整个不画，宁可少也不要糊成一团。
    颜色按地物性质分：水系蓝、绿地绿、路名棕、楼名深棕。 */
-const LANDMARK = { size: 13,   fill: "#4A6B3A", weight: 600 };   // 公园/广场/河
-const WATER    = { size: 12.5, fill: "#3C6E85", weight: 600 };
-const BUILDING = { size: 11.5, fill: "#5E503A", weight: 600 };
-const ROAD_BIG = { size: 11.5, fill: "#6B5A3E", weight: 600 };
-const ROAD_SML = { size: 10.5, fill: "#8A7B5E", weight: 500 };
-const RAIL     = { size: 10,   fill: "#7A7186", weight: 500 };
+const LANDMARK = { size: 13,   fill: "#557546", weight: 600, ls: 0.12 };   // 公园/广场/河
+const WATER    = { size: 12.5, fill: "#3E6A80", weight: 600 };
+const BUILDING = { size: 11.5, fill: "#6B5A44", weight: 600 };
+const ROAD_BIG = { size: 11.5, fill: "#7A6A52", weight: 600 };
+const ROAD_SML = { size: 10.5, fill: "#857255", weight: 500 };
+const RAIL     = { size: 10,   fill: "#776C92", weight: 500 };
+
+/* 四角星（信物旁的金色闪光），单位半径，用 scale 缩放 */
+const STAR = "M0-1C.15-.15 .15-.15 1 0C.15 .15 .15 .15 0 1C-.15 .15-.15 .15-1 0C-.15-.15-.15-.15 0-1Z";
 
 const el = (tag, attrs) => {
   const e = document.createElementNS(NS, tag);
@@ -88,18 +115,18 @@ export function createMap(mount, geo, target) {
   const wx = (lon) => (lon - tLon) * mPerLon;
   const wy = (lat) => -(lat - tLat) * mPerLat;
 
+  // 当前国度的正色：app.js 进站时先设 --kc 再建图，这里直接读，不改调用签名
+  const KC = getComputedStyle(document.documentElement).getPropertyValue("--kc").trim() || GOLD;
+
   const svg = el("svg", { viewBox: `0 0 ${W} ${H}`, preserveAspectRatio: "xMidYMid slice",
                           class: "map-svg" });
   svg.appendChild(el("rect", { x: -30000, y: -30000, width: 60000, height: 60000,
-                               fill: "#F5EBD8" }));
+                               fill: PAPER }));
 
   const gWorld = el("g", { class: "world" });
-  const gGround = el("g", {}), gWater = el("g", {}), gBld = el("g", {});
+  const gGround = el("g", {}), gWater = el("g", {}), gDeco = el("g", {}), gBld = el("g", {});
   const gRoad = el("g", {}), gRoadTop = el("g", {});
   const gLabel = el("g", { class: "labels" });
-
-  const path = (f) => f.g.map((p, i) =>
-    (i ? "L" : "M") + wx(p[1]).toFixed(1) + " " + wy(p[0]).toFixed(1)).join(" ");
 
   /** 世界坐标下的包围盒，用来判断「这个地物在屏幕上够不够大，配不配拥有名字」 */
   function bbox(f) {
@@ -142,7 +169,8 @@ export function createMap(mount, geo, target) {
   function addLabel(name, X, Y, sizeM, style, ang, prio) {
     const node = el("text", { "text-anchor": "middle", "dominant-baseline": "middle",
                               fill: style.fill, "font-weight": style.weight,
-                              "paint-order": "stroke", stroke: "#F5EBD8",
+                              "paint-order": "stroke", stroke: PAPER,
+                              ...(style.ls ? { "letter-spacing": style.ls + "em" } : {}),
                               "stroke-width": 3.4, "stroke-linejoin": "round",
                               "font-family": "PingFang SC, Hiragino Sans GB, sans-serif" });
     node.textContent = name;
@@ -152,49 +180,269 @@ export function createMap(mount, geo, target) {
                 minSpan: clamp(sizeM / 0.08, 0, 6000) });
   }
 
-  let bi = 0;
+  /* ---- 几何：按「样式 × 500 米分块」合并成大 path，只建一次 ----
+     两头都不能走极端（WebKit 2x 实测）：
+     · 一个要素一条 path（原版 1600 节点）：父组 transform 一变全部重新布局，JS 每帧 8 ms；
+     · 整张图一种样式一条 path：节点只剩 200，但画面外的部分没法按包围盒跳过，
+       每帧整条重新描边、重新算虚线（16 公里的轨枕虚线、300 条圆点小径），帧间隔反而多 30~60 ms。
+     按块合并：节点几百，画面外的块整块跳过。线按「每段中点落在哪块」切开，切口是两个圆头，看不出来。
+     Overpass 会把穿城的河、高速整条返回（数据外包框 27×15 公里），离有楼有绿地的那片超过 800 米的线段不画，
+     否则光一条清水河就切出几十块。 */
+  const CH = 700;
+  const f1 = (v) => v.toFixed(1);
+  const pt = ([x, y]) => f1(x) + " " + f1(y);
+  const ptsOf = (f) => f.g.map((p) => [wx(p[1]), wy(p[0])]);
+  const circ = (x, y, r) => `M${f1(x - r)} ${f1(y)}a${f1(r)} ${f1(r)} 0 1 0 ${f1(2 * r)} 0a${f1(r)} ${f1(r)} 0 1 0 ${f1(-2 * r)} 0`;
+
+  const D = new Map();                             // 样式键 → (块 → path 数据)
+  const add = (k, x, y, s, ch = CH) => {
+    const c = Math.floor(x / ch) + "," + Math.floor(y / ch);
+    let m = D.get(k);
+    if (!m) D.set(k, (m = new Map()));
+    m.set(c, (m.get(c) || "") + s);
+  };
+  const addRing = (k, q, ch) => add(k, q[0][0], q[0][1], "M" + q.map(pt).join("L") + "Z", ch);
+  let WX0 = 1e9, WY0 = 1e9, WX1 = -1e9, WY1 = -1e9;              // 有面状数据的那片，外扩 800 米
   for (const f of geo) {
-    const t = f.t, d = path(f);
-    if (t.landuse || t.leisure) {
-      const col = t.landuse === "forest" ? "#C6DBB2" : t.leisure ? "#CFE0BB" : "#D6E3C4";
-      gGround.appendChild(el("path", { d, fill: col, stroke: "#AFC79A", "stroke-width": 1.2,
-                                       "vector-effect": "non-scaling-stroke" }));
-    } else if (t.natural === "water" || t.waterway) {
-      gWater.appendChild(el("path", { d, fill: "#BEDAE6", stroke: "#94BFD2", "stroke-width": 1.3,
-                                      "vector-effect": "non-scaling-stroke" }));
-    } else if (t.building) {
-      gBld.appendChild(el("path", { d, fill: BUILDING_FILL[bi++ % 3], stroke: "#AE9160",
-                                    "stroke-width": 1.4, "stroke-linejoin": "round",
-                                    "vector-effect": "non-scaling-stroke" }));
-    } else if (t.barrier === "wall") {
-      gBld.appendChild(el("path", { d, fill: "none", stroke: "#B29B76", "stroke-width": 2.6,
-                                    "stroke-linecap": "round",
-                                    "vector-effect": "non-scaling-stroke" }));
-    } else if (t.railway) {
-      gRoad.appendChild(el("path", { d, fill: "none", stroke: "#9C93A8", "stroke-width": 2.2,
-                                     "stroke-dasharray": "10 6",
-                                     "vector-effect": "non-scaling-stroke" }));
+    if (!(f.t.building || f.t.landuse || f.t.leisure || f.t.natural)) continue;
+    const [x0, y0, x1, y1] = bbox(f);
+    WX0 = Math.min(WX0, x0 - 800); WY0 = Math.min(WY0, y0 - 800);
+    WX1 = Math.max(WX1, x1 + 800); WY1 = Math.max(WY1, y1 + 800);
+  }
+  const addLine = (k, q) => {
+    let cur = null, d = "", cx = 0, cy = 0;
+    for (let i = 1; i < q.length; i++) {
+      const [ax, ay] = q[i - 1], [bx, by] = q[i];
+      // 两端在窗口同一侧之外才丢（穿过窗口的长段照画）
+      if ((ax < WX0 && bx < WX0) || (ax > WX1 && bx > WX1) || (ay < WY0 && by < WY0) || (ay > WY1 && by > WY1)) {
+        if (cur !== null) add(k, cx, cy, d);
+        cur = null;
+        continue;
+      }
+      const mx = (q[i - 1][0] + q[i][0]) / 2, my = (q[i - 1][1] + q[i][1]) / 2;
+      const c = Math.floor(mx / CH) + "," + Math.floor(my / CH);
+      if (c !== cur) {
+        if (cur !== null) add(k, cx, cy, d);
+        cur = c; cx = mx; cy = my; d = "M" + pt(q[i - 1]);
+      }
+      d += "L" + pt(q[i]);
     }
+    if (cur !== null) add(k, cx, cy, d);
+  };
+  /** 把一个样式键的所有块落成 path */
+  const put = (g, k, a) => {
+    for (const d of D.get(k)?.values() || [])
+      g.appendChild(el("path", { d, "vector-effect": "non-scaling-stroke", ...a }));
+  };
+
+  /** 统一环的方向：同样式的面合并成一条 path 时，反向的环在 nonzero 规则下会把重叠处挖成洞 */
+  function orient(q) {
+    let a = 0;
+    for (let i = 0, j = q.length - 1; i < q.length; j = i++) a += (q[j][0] - q[i][0]) * (q[j][1] + q[i][1]);
+    return a < 0 ? q.reverse() : q;
+  }
+  /** 手绘感：长边细分、法向抖动 ≤1.2 米、Chaikin 切角 ≤2.5 米。只给楼、绿地、水面——
+      路不动：GNSS 静止误差才 ±5 米，路一抖「我」就落不到路上 */
+  function soft(q, rand) {
+    if (q.length > 2 && q[0][0] === q.at(-1)[0] && q[0][1] === q.at(-1)[1]) q = q.slice(0, -1);
+    const s = [];
+    for (let i = 0; i < q.length; i++) {
+      const [x0, y0] = q[i], [x1, y1] = q[(i + 1) % q.length];
+      const L = Math.hypot(x1 - x0, y1 - y0) || 1, n = Math.ceil(L / 12);
+      for (let j = 0; j < n; j++) {
+        const o = (rand() * 2 - 1) * 1.2;
+        s.push([x0 + (x1 - x0) * j / n - (y1 - y0) / L * o, y0 + (y1 - y0) * j / n + (x1 - x0) / L * o]);
+      }
+    }
+    const out = [];
+    for (let i = 0; i < s.length; i++) {
+      const [x0, y0] = s[i], [x1, y1] = s[(i + 1) % s.length];
+      const c = Math.min(0.25, 2.5 / (Math.hypot(x1 - x0, y1 - y0) || 1));
+      out.push([x0 + (x1 - x0) * c, y0 + (y1 - y0) * c], [x1 - (x1 - x0) * c, y1 - (y1 - y0) * c]);
+    }
+    return out;
+  }
+  function inPoly(x, y, q) {
+    let hit = false;
+    for (let i = 0, j = q.length - 1; i < q.length; j = i++)
+      if ((q[i][1] > y) !== (q[j][1] > y) &&
+          x < (q[j][0] - q[i][0]) * (y - q[i][1]) / (q[j][1] - q[i][1]) + q[i][0]) hit = !hit;
+    return hit;
   }
 
-  // 路分两遍画：先描边、再填充，交叉口才不会互相盖出毛刺
-  const roads = geo.filter((f) => f.t.highway && roadStyle(f.t.highway))
-    .sort((a, b) => roadStyle(b.t.highway).w - roadStyle(a.t.highway).w);
-  for (const f of roads) {
-    const s = roadStyle(f.t.highway);
-    gRoad.appendChild(el("path", { d: path(f), fill: "none", stroke: s.stroke,
-                                   "stroke-width": s.w + s.sw * 2, "stroke-linecap": "round",
-                                   "stroke-linejoin": "round",
-                                   "vector-effect": "non-scaling-stroke" }));
+  const greens = [], waters = [], holes = [];      // 撒树撒花用：能撒的、撒水纹的、不许撒的（楼/水/球场）
+  let bi = 0;
+  geo.forEach((f, idx) => {
+    const t = f.t, rand = rng(idx + 1);
+    if (t.landuse || t.leisure) {
+      const q = ptsOf(f), s = orient(soft(q, rand));
+      const kind = t.landuse === "forest" ? "forest" : t.leisure === "park" ? "park" : "grass";
+      addRing("g_" + kind, s);
+      addRing("gwash", s);
+      (/^(pitch|stadium|sports_centre|track)$/.test(t.leisure || "") ? holes : greens)
+        .push({ q, box: bbox(f), kind });
+    } else if (t.natural === "water") {
+      const q = ptsOf(f);
+      addRing("water", orient(soft(q, rand)));
+      waters.push({ q, box: bbox(f) });
+      holes.push({ q, box: bbox(f) });
+    } else if (t.waterway) {
+      // 河道是折线：不能带填充，SVG 会把它隐式闭合成大片假水面（清水河闭合后 14×13 公里）
+      if (t.waterway === "dam") return;
+      const q = ptsOf(f);
+      addLine(/^(river|canal)$/.test(t.waterway) ? "ww0" : /^(drain|ditch)$/.test(t.waterway) ? "ww2" : "ww1", q);
+      if (!t.tunnel && !/^(drain|ditch)$/.test(t.waterway)) addLine("glint", q);
+    } else if (t.building) {
+      const q = ptsOf(f);
+      addRing("b" + (bi++ % 3), orient(soft(q, rand)));
+      holes.push({ q, box: bbox(f) });
+    } else if (t.barrier === "wall") {
+      addLine("wall", ptsOf(f));
+    } else if (t.railway && RAILS.test(t.railway)) {
+      addLine("rail", ptsOf(f));
+    }
+  });
+
+  // 路：先所有桥的垫底，再所有外边，最后所有填充——交叉口才不会互相盖出毛刺
+  for (const f of geo) {
+    const t = f.t, s = t.highway && roadStyle(t.highway);
+    if (!s) continue;
+    if (t.area === "yes") { addRing("plaza", ptsOf(f)); continue; }    // 步行广场是面，不是线
+    const q = ptsOf(f), tun = t.tunnel && t.tunnel !== "no" ? "t" : "";
+    if (t.bridge === "yes") addLine("rb" + s.i, q);
+    addLine("rc" + tun + s.i, q);
+    if (s.fill) addLine("rf" + tun + s.i, q);
   }
-  for (const f of roads) {
-    const s = roadStyle(f.t.highway);
-    if (!s.fill) continue;
-    gRoadTop.appendChild(el("path", { d: path(f), fill: "none", stroke: s.fill,
-                                      "stroke-width": s.w, "stroke-linecap": "round",
-                                      "stroke-linejoin": "round",
-                                      "vector-effect": "non-scaling-stroke" }));
+
+  /* 撒点：全局抖动网格（不按单块采样，公园和草地重叠处不会撒两遍）+ 点在多边形内 + 剔除 25%。
+     种子取网格坐标，每站重建都长在同一处。 */
+  function scatter(list, step, salt, fn, avoid = true) {
+    const seen = new Set();
+    for (const g of list) {
+      const [x0, y0, x1, y1] = g.box;
+      for (let ix = Math.floor(x0 / step); ix <= Math.floor(x1 / step); ix++)
+        for (let iy = Math.floor(y0 / step); iy <= Math.floor(y1 / step); iy++) {
+          const key = ix + "," + iy;
+          if (seen.has(key)) continue;
+          const r = rng(Math.imul(ix, 73856093) ^ Math.imul(iy, 19349663) ^ salt);
+          const x = (ix + r()) * step, y = (iy + r()) * step;
+          if (!inPoly(x, y, g.q)) continue;
+          seen.add(key);
+          if (r() < 0.25) continue;
+          if (avoid && holes.some((h) => x > h.box[0] && x < h.box[2] && y > h.box[1] && y < h.box[3] &&
+                                         inPoly(x, y, h.q))) continue;
+          fn(x, y, r);
+        }
+    }
   }
+  const of = (k) => greens.filter((g) => g.kind === k);
+
+  // 水彩树：亮面一层；暗面错位、缩小再罩一层。封顶 2600 棵
+  let nTree = 0;
+  const tree = (x, y, r) => {
+    if (nTree++ > 2600) return;
+    const R = 5.5 + r() * 1.5;
+    add("treeL", x, y, circ(x, y, R));
+    add("treeD", x, y, circ(x + 1.8, y + 1.8, R * 0.7));
+  };
+  scatter(of("forest"), 16, 11, tree);
+  scatter(of("park"), 26, 23, tree);
+
+  // 花：一律 5 个等大圆点的梅花（大小不一的三点会拼出某只老鼠的剪影）。信物 280 米内开国度色
+  let nFlower = 0;
+  const flower = (x, y, r) => {
+    const k = "fl" + (Math.hypot(x, y) < 280 ? 2 : nFlower++ % 2), a0 = r() * 1.26;
+    let d = "";
+    for (let j = 0; j < 5; j++) d += circ(x + Math.cos(a0 + j * 1.2566) * 2.2, y + Math.sin(a0 + j * 1.2566) * 2.2, 1.5);
+    add(k, x, y, d);
+  };
+  scatter(of("grass"), 22, 37, flower);
+  scatter(of("park"), 40, 53, flower);
+
+  // 水面上的小波光
+  scatter(waters, 16, 61, (x, y) => add("ripple", x, y, `M${f1(x - 3)} ${f1(y)}q3 -1.6 6 0`), false);
+
+  /* 纸上晕开的颜料：只在有数据的那片地上，按 120 米抖动网格落几百块不规则的淡色水渍。
+     颜色只取纸的暖调（不用绿、不用蓝），免得被读成公园或水面。 */
+  let bx0 = 1e9, by0 = 1e9, bx1 = -1e9, by1 = -1e9;
+  for (const h of [...greens, ...holes]) {
+    bx0 = Math.min(bx0, h.box[0]); by0 = Math.min(by0, h.box[1]);
+    bx1 = Math.max(bx1, h.box[2]); by1 = Math.max(by1, h.box[3]);
+  }
+  for (let ix = Math.floor((bx0 - 300) / 120); ix <= Math.floor((bx1 + 300) / 120); ix++)
+    for (let iy = Math.floor((by0 - 300) / 120); iy <= Math.floor((by1 + 300) / 120); iy++) {
+      const r = rng(Math.imul(ix, 83492791) ^ Math.imul(iy, 2654435761) ^ 71);
+      if (r() < 0.35) continue;
+      const cx = (ix + r()) * 120, cy = (iy + r()) * 120, R = 38 + r() * 46;
+      let q = [];
+      for (let j = 0; j < 9; j++) {
+        const a = (j + r() * 0.5) / 9 * Math.PI * 2, rr = R * (0.7 + r() * 0.45);
+        q.push([cx + Math.cos(a) * rr, cy + Math.sin(a) * rr]);
+      }
+      for (let it = 0; it < 2; it++)
+        q = q.flatMap(([x0, y0], i) => {
+          const [x1, y1] = q[(i + 1) % q.length];
+          return [[x0 * 0.75 + x1 * 0.25, y0 * 0.75 + y1 * 0.25], [x0 * 0.25 + x1 * 0.75, y0 * 0.25 + y1 * 0.75]];
+        });
+      addRing("blot" + ((ix * 7 + iy * 3) & 0x7fffffff) % 3, q, 1600);       // 纯填充、便宜，块分大些省节点
+    }
+
+  /* ---- 按图层落盘。能用 fill-opacity 就不用 opacity（后者在 WebKit 里每个元素开一块离屏层） ---- */
+  put(gGround, "blot0", { fill: "#E9D3AE", "fill-opacity": 0.18 });
+  put(gGround, "blot1", { fill: "#EFC9C0", "fill-opacity": 0.16 });
+  put(gGround, "blot2", { fill: "#E2D9BD", "fill-opacity": 0.18 });
+  // 二次晕染：所有绿地错位 1.5 米再垫一层，做出套色没对准的错位感
+  put(gGround, "gwash", { fill: "#A9CF95", "fill-opacity": 0.22, transform: "translate(1.5 -1)" });
+  for (const k of ["park", "forest", "grass"])
+    put(gGround, "g_" + k, { fill: GREEN[k], stroke: "#9CC28A", "stroke-width": 2.4, "stroke-opacity": 0.5,
+                             "stroke-linejoin": "round" });
+
+  put(gWater, "water", { fill: "#BFDDE8", "fill-opacity": 0.9, stroke: "#8DBBD0", "stroke-width": 2.8,
+                         "stroke-opacity": 0.55, "stroke-linejoin": "round" });
+  [9, 5, 3.4].forEach((w, i) => put(gWater, "ww" + i, { fill: "none", stroke: "#9CCBDD", "stroke-width": w,
+                                                         "stroke-linecap": "round", "stroke-linejoin": "round" }));
+  put(gWater, "glint", { fill: "none", stroke: "#FFFFFF", "stroke-width": 1.2, "stroke-opacity": 0.7,
+                         "stroke-dasharray": "1 14", "stroke-linecap": "round" });
+  put(gWater, "ripple", { fill: "none", stroke: "#FFFFFF", "stroke-width": 1.4, "stroke-opacity": 0.8,
+                          "stroke-linecap": "round" });
+
+  // 当前国度的领地：280 米圈（三站相距 700~930 米，互不重叠）。外面一圈宽而极淡的光晕
+  gDeco.appendChild(el("path", { d: circ(0, 0, 280), fill: KC, "fill-opacity": 0.06, stroke: KC,
+    "stroke-width": 14, "stroke-opacity": 0.07, "vector-effect": "non-scaling-stroke" }));
+  gDeco.appendChild(el("path", { d: circ(0, 0, 280), fill: "none", stroke: KC, "stroke-width": 1.6,
+    "stroke-opacity": 0.45, "stroke-dasharray": "2 6", "stroke-linecap": "round", "vector-effect": "non-scaling-stroke" }));
+  put(gDeco, "treeL", { fill: "#A9CC95", "fill-opacity": 0.6 });
+  put(gDeco, "treeD", { fill: "#8DB77A", "fill-opacity": 0.38 });
+  put(gDeco, "fl0", { fill: "#EBB7C5", "fill-opacity": 0.85 });
+  put(gDeco, "fl1", { fill: "#F2D98E", "fill-opacity": 0.85 });
+  put(gDeco, "fl2", { fill: KC, "fill-opacity": 0.75 });
+
+  BUILDING_FILL.forEach((c, i) => put(gBld, "b" + i, { fill: c, stroke: "#B79C7E", "stroke-width": 1.2,
+                                                       "stroke-opacity": 0.75, "stroke-linejoin": "round" }));
+  put(gBld, "wall", { fill: "none", stroke: "#CDB89A", "stroke-width": 1.8, "stroke-linecap": "round",
+                      "stroke-linejoin": "round" });
+
+  put(gRoad, "plaza", { fill: "#FFFBF2", stroke: "#D2BC98", "stroke-width": 1.2, "stroke-linejoin": "round" });
+  ROAD.forEach(([, w, fill, , sw], i) => put(gRoad, "rb" + i, { fill: "none", stroke: "#C9B08A",
+    "stroke-width": (fill ? w + sw * 2 : w) + 3, "stroke-linejoin": "round" }));
+  ROAD.forEach(([, w, fill, stroke, sw, dash], i) => {
+    // 圆点小径用圆头，台阶的短横用平头（圆头会把短横连成一条实线）
+    const a = { fill: "none", stroke, "stroke-width": fill ? w + sw * 2 : w, "stroke-linejoin": "round",
+                "stroke-linecap": dash && !dash.startsWith("0.1") ? "butt" : "round",
+                ...(dash ? { "stroke-dasharray": dash } : {}) };
+    put(gRoad, "rc" + i, a);
+    put(gRoad, "rct" + i, { ...a, "stroke-dasharray": dash || "4 3", "stroke-opacity": dash ? 0.5 : 1 });
+  });
+  ROAD.forEach(([, w, fill], i) => {
+    if (!fill) return;
+    const a = { fill: "none", stroke: fill, "stroke-width": w, "stroke-linecap": "round", "stroke-linejoin": "round" };
+    put(gRoadTop, "rf" + i, a);
+    put(gRoadTop, "rft" + i, { ...a, "stroke-opacity": 0.6 });
+  });
+  // 轨道压在路面上（成都的有轨电车走路中间），再叠一层短横当枕木
+  put(gRoadTop, "rail", { fill: "none", stroke: "#9A8FB5", "stroke-width": 2, "stroke-linejoin": "round" });
+  put(gRoadTop, "rail", { fill: "none", stroke: "#9A8FB5", "stroke-width": 6, "stroke-opacity": 0.7,
+                          "stroke-dasharray": "1.2 8" });
 
   /* 收名字。顺序即优先级：水面和绿地是地标 → 楼 → 大路 → 小路 → 轨道。 */
   const named = geo.filter((f) => f.t.name);
@@ -229,7 +477,7 @@ export function createMap(mount, geo, target) {
     }
   }
 
-  gWorld.append(gGround, gWater, gBld, gRoad, gRoadTop, gLabel);
+  gWorld.append(gGround, gWater, gDeco, gBld, gRoad, gRoadTop, gLabel);
   svg.appendChild(gWorld);
 
   // 浮层用屏幕坐标，每次重算：轨迹、指路虚线、信物、「你在这」
@@ -240,23 +488,41 @@ export function createMap(mount, geo, target) {
   const link = el("path", { fill: "none", stroke: GOLD, "stroke-width": 2,
                             "stroke-dasharray": "7 7", opacity: .45 });
 
-  // 信物在画面里：金色别针 + 一圈光环
+  // 信物在画面里：金色别针 + 国度色宝石 + 三颗金色四角星
   const pinNear = el("g", { class: "pin-near" });
-  pinNear.innerHTML = `<circle r="13" fill="${GOLD}" opacity=".16"/>
-    <circle r="7.5" fill="#FFFBF4" stroke="${GOLD}" stroke-width="2.2"/>
-    <circle r="2.6" fill="${GOLD}"/>`;
+  pinNear.innerHTML = `<circle r="17" fill="${GOLD}" fill-opacity=".15"/>
+    <circle r="9" fill="#FFFBF4" stroke="${GOLD}" stroke-width="2.6"/>
+    <circle r="3.6" fill="${KC}"/>
+    ${[[16, -13, 5.5], [-15, -10, 4], [10, 15, 3.4]].map(([x, y, r]) =>
+      `<path d="${STAR}" transform="translate(${x} ${y}) scale(${r})" fill="${GOLD}"/>`).join("")}`;
 
-  // 信物在画面外：贴边一个箭头指着它，方向比位置重要
+  // 信物在画面外：贴边一个箭头指着它，方向比位置重要。外面一圈国度色虚线
   const pinFar = el("g", { class: "pin-far" });
-  pinFar.innerHTML = `<circle r="15" fill="${GOLD}" opacity=".14"/>
-    <circle r="14" fill="#FFFBF4" stroke="${GOLD}" stroke-width="2.2"/>
+  pinFar.innerHTML = `<circle r="20" fill="none" stroke="${KC}" stroke-width="1.6" stroke-opacity=".6"
+      stroke-dasharray="2 4" stroke-linecap="round"/>
+    <circle r="15" fill="#FFFBF4" stroke="${GOLD}" stroke-width="2.4"/>
     <path d="M -3.5 -6 L 5 0 L -3.5 6 Z" fill="${GOLD}"/>`;
 
+  // 当前国度的塔：单座、不对称（旗子偏一边）、上方不画光弧——通用童话元素，不是哪家的城堡标志。
+  // 屏幕坐标、大小恒定，立在领地圈最北点
+  const tower = el("g", { class: "tower" });
+  tower.innerHTML = `<path d="M-8 0V-26H8V0Z" fill="#FFFBF4" stroke="#B79C7E" stroke-width="1.6" stroke-linejoin="round"/>
+    <path d="M-11 -26L0 -46L11 -26Z" fill="${KC}" fill-opacity=".38" stroke="#B79C7E" stroke-width="1.6" stroke-linejoin="round"/>
+    <path d="M0 -46V-56L9 -52L0 -48Z" fill="${KC}" stroke="${KC}" stroke-width="1" stroke-linejoin="round"/>
+    <path d="M-3.5 0V-7A3.5 3.5 0 0 1 3.5 -7V0" fill="none" stroke="#B79C7E" stroke-width="1.4"/>
+    <path d="M-4.5 -15V-19.5A1.6 1.6 0 0 1 -1.3 -19.5V-15Z" fill="#B79C7E"/>`;
+
+  // 「我」：外面那圈跟着定位精度变大——信号弱时她看得见是定位飘了，不是雷达坏了
   const me = el("g", {});
-  me.innerHTML = `<circle r="19" fill="#2B2F3C" opacity=".08"/>
+  me.innerHTML = `<circle r="20" fill="#2B2F3C" fill-opacity=".07" stroke="#2B2F3C" stroke-opacity=".18" stroke-width="1"/>
     <circle r="9" fill="#FFFBF4" stroke="#2B2F3C" stroke-width="2.6"/>
     <circle r="3.4" fill="#2B2F3C"/>`;
-  gOver.append(link, trail, pinNear, pinFar, me);
+  const accRing = me.firstElementChild;
+  // 朝向扇形：罗盘告诉我们她面朝哪边。转身时跟着转，对准那条金色虚线就是对准了礼物
+  const cone = el("path", { d: "M0 0L-17 -50A53 53 0 0 1 17 -50Z", fill: KC, "fill-opacity": 0.3 });
+  cone.style.display = "none";
+  me.insertBefore(cone, accRing.nextSibling);
+  gOver.append(tower, link, trail, pinNear, pinFar, me);
   svg.appendChild(gOver);
 
   mount.replaceChildren(svg);
@@ -329,6 +595,9 @@ export function createMap(mount, geo, target) {
     t2s.k = k; t2s.cy = VY1 / 2;
     gWorld.setAttribute("transform",
       `translate(${(W / 2 - center.x * k).toFixed(1)} ${(VY1 / 2 - center.y * k).toFixed(1)}) scale(${k.toFixed(6)})`);
+    // 树和花按米画，视野再远就只剩一片噪点（自动跟随封顶 1300，只有手动缩放才会超过）
+    const decoOn = span <= 1300;
+    if (gDeco.style.display !== (decoOn ? "" : "none")) gDeco.style.display = decoOn ? "" : "none";
 
     /* 标签排布：按优先级抢位置，抢不到就不画。
        横屏竖屏都按屏幕坐标算，所以同一套数据在两种朝向下都不会糊。 */
@@ -348,6 +617,15 @@ export function createMap(mount, geo, target) {
     const [px_, py_] = toScreen(0, 0);
     mark(px_, py_);
     if (meFix) mark(...toScreen(meFix._X, meFix._Y));
+    // 塔先占位，标签绕开它；落在画面外或压在卡片/雷达盘底下就不画
+    const [tx_, ty_] = toScreen(0, -280);
+    const towerOn = decoOn && tx_ > VX0 + 24 && tx_ < VX1 - 24 && ty_ > VY0 + 76 && ty_ < VY1 - 8 &&
+      !blks.some(([x0, y0, x1, y1]) => tx_ + 16 > x0 && tx_ - 16 < x1 && ty_ > y0 && ty_ - 70 < y1);
+    tower.style.display = towerOn ? "" : "none";
+    if (towerOn) {
+      tower.setAttribute("transform", `translate(${tx_.toFixed(1)} ${ty_.toFixed(1)}) scale(1.2)`);
+      mark(tx_, ty_ - 14); mark(tx_, ty_ - 40); mark(tx_, ty_ - 60);
+    }
 
     // 先全藏掉再挑着显示。只藏「这一轮没通过筛选的」是不够的——
     // 被截断（下面的 slice）和没排上队的那些压根不会被遍历到，会一直挂着上一轮的样式。
@@ -367,7 +645,7 @@ export function createMap(mount, geo, target) {
       if (used[l.prio] >= CAP[l.prio]) continue;
       const [x, y] = toScreen(l.X, l.Y);
       const fs = px(l.style.size);
-      const w = textW(l.name, fs) + px(6), h = fs * 1.25;
+      const w = textW(l.name, fs) * (1 + (l.style.ls || 0)) + px(6), h = fs * 1.25;
       if (x < VX0 + w / 2 || x > VX1 - w / 2 || y < VY0 + h || y > VY1 - h) {
         l.node.style.display = "none"; continue;
       }
@@ -431,6 +709,7 @@ export function createMap(mount, geo, target) {
       const [mx_, my_] = toScreen(meFix._X, meFix._Y);
       me.setAttribute("transform", `translate(${mx_} ${my_})`);
       me.style.display = "";
+      accRing.setAttribute("r", clamp((meFix.acc || 0) * k, 20, 120).toFixed(1));
       // 指路虚线。热的时候亮一点——地图和雷达说的是同一件事，不该各说各的。
       link.setAttribute("d", `M ${mx_} ${my_} L ${ax.toFixed(1)} ${ay.toFixed(1)}`);
       link.setAttribute("opacity", (0.25 + clamp(signal, 0, 1) * 0.55).toFixed(2));
@@ -531,6 +810,12 @@ export function createMap(mount, geo, target) {
     // 回到「以我为中心」。立即重画一帧，不等下一个定位点。
     // span 清零：双指缩放过的比例不算数，按当前距离重新挑档（否则迟滞会把手动比例一直留着）
     followMe() { span = 0; setFollow(true); repaint(); },
+    // 地图北朝上，所以罗盘读数直接就是旋转角。每 0.1 秒调一次，只改一个属性，不重画
+    setFacing(h) {
+      if (h === null) { if (cone.style.display !== "none") cone.style.display = "none"; return; }
+      cone.style.display = "";
+      cone.setAttribute("transform", `rotate(${Math.round(h)})`);
+    },
   };
 }
 
@@ -542,18 +827,22 @@ export function createRadarDisc(mount) {
   const S = 200, C = S / 2;
   const svg = el("svg", { viewBox: `0 0 ${S} ${S}`, class: "disc-svg" });
 
-  svg.appendChild(el("circle", { cx: C, cy: C, r: 94, fill: "#FFFBF4", opacity: .9 }));
-  for (const r of [94, 62, 32]) {
-    svg.appendChild(el("circle", { cx: C, cy: C, r, fill: "none", stroke: GOLD,
-                                   "stroke-width": r === 94 ? 1.6 : 1, opacity: r === 94 ? .7 : .32 }));
+  // 盘只建一次、三站共用，所以内环的国度色走 CSS 变量（--kc），进站换色时自己跟着变
+  svg.appendChild(el("circle", { cx: C, cy: C, r: 96, fill: "#FFFBF4", "fill-opacity": .94 }));
+  svg.appendChild(el("circle", { cx: C, cy: C, r: 88, fill: "none", style: "stroke:var(--kc)",
+                                 "stroke-width": 7, "stroke-opacity": .08 }));
+  svg.appendChild(el("circle", { cx: C, cy: C, r: 94, fill: "none", stroke: GOLD, "stroke-width": 1.6,
+                                 "stroke-opacity": .85 }));
+  for (const r of [62, 32]) {
+    svg.appendChild(el("circle", { cx: C, cy: C, r, fill: "none", style: "stroke:var(--kc)",
+                                   "stroke-width": 1.2, "stroke-opacity": .28, "stroke-dasharray": "2 4",
+                                   "stroke-linecap": "round" }));
   }
-  const cross = el("g", { opacity: .22 });
-  cross.appendChild(el("line", { x1: C, y1: C - 94, x2: C, y2: C + 94, stroke: GOLD, "stroke-width": 1 }));
-  cross.appendChild(el("line", { x1: C - 94, y1: C, x2: C + 94, y2: C, stroke: GOLD, "stroke-width": 1 }));
-  svg.appendChild(cross);
+  svg.appendChild(el("path", { d: `M${C} ${C - 94}V${C + 94}M${C - 94} ${C}H${C + 94}`, stroke: GOLD,
+                               "stroke-width": 1, "stroke-opacity": .2 }));
 
-  const nlab = el("text", { x: C, y: 14, "text-anchor": "middle", fill: GOLD, "font-size": 11,
-                            "font-family": "Songti SC, serif", "font-weight": 600 });
+  const nlab = el("text", { x: C, y: 17, "text-anchor": "middle", fill: GOLD, "font-size": 11,
+                            "font-family": "PingFang SC, -apple-system, sans-serif", "font-weight": 600 });
   nlab.textContent = "北";
   svg.appendChild(nlab);
 
@@ -562,12 +851,12 @@ export function createRadarDisc(mount) {
                                "stroke-width": 2.4, opacity: 0 });
   svg.appendChild(pulse);
 
-  const sweep = el("line", { x1: C, y1: C, x2: C, y2: C - 94, stroke: GOLD,
-                             "stroke-width": 2, opacity: .5 });
+  const sweep = el("line", { x1: C, y1: C, x2: C, y2: C - 90, stroke: GOLD,
+                             "stroke-width": 2, "stroke-opacity": .6, "stroke-linecap": "round" });
   svg.appendChild(sweep);
 
   const blip = el("g", {});
-  blip.innerHTML = `<circle r="10" fill="${GOLD}" opacity=".16"/>
+  blip.innerHTML = `<circle r="10" fill="${GOLD}" fill-opacity=".16"/>
     <circle r="5" fill="${GOLD}"/><circle r="5" fill="none" stroke="#FFFBF4" stroke-width="1.6"/>`;
   svg.appendChild(blip);
 
@@ -579,7 +868,7 @@ export function createRadarDisc(mount) {
 
   const num = el("text", { x: C, y: C + 46, "text-anchor": "middle", fill: "#2B2F3C",
                            "font-size": 21, "font-weight": 600, class: "disc-dist",
-                           "font-family": "ui-monospace, SF Mono, monospace" });
+                           "font-family": "ui-rounded, SF Pro Rounded, -apple-system, sans-serif" });
   svg.appendChild(num);
   const unit = el("text", { x: C, y: C + 62, "text-anchor": "middle", fill: "#6B6F7C",
                             "font-size": 10, "font-family": "PingFang SC, sans-serif" });

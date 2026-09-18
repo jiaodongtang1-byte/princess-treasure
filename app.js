@@ -125,6 +125,9 @@ function onFix(p) {
   const fix = {
     lat: p.coords.latitude, lon: p.coords.longitude,
     acc: p.coords.accuracy, t: p.timestamp || now,
+    // iOS 直接给 CoreLocation 的速度和行进方向（没在动或不是卫星定位时是 null，别的浏览器可能给 NaN）
+    speed: Number.isFinite(p.coords.speed) ? p.coords.speed : null,
+    heading: Number.isFinite(p.coords.heading) ? p.coords.heading : null,
   };
 
   geo.lastFix = fix;
@@ -165,13 +168,28 @@ function redrawMap(s) {
   }
   map.draw({ me: geo.lastFix, trailPts: geo.trail, signal: s ? s.signal : 0 });
   disc.update({ dist: s.dist, bearing: s.bearing, spanM: map.spanM, signal: s.signal, acc: s.acc });
-  // 地图上的箭头/别针已经指明了方向，提示只补它说不了的：还有多远、是不是走对了、信号靠不靠得住
-  $("hud-hint").textContent =
-    s.dist < 60 && !s.weak ? "就在附近了"
-    : s.weak ? "信号弱，雷达先不响，看地图走"
-    : s.signal > 0.5 ? "对，就是这个方向"
-    : s.signal > 0 ? "差不多是这个方向"
-    : "跟着金色标记走";
+  setHud(hudText(s), true);
+}
+
+/* 地图上的箭头/别针已经指明了礼物在哪，提示只补它说不了的：该怎么动、是不是走对了、信号靠不靠得住 */
+function hudText(s) {
+  if (!geo.ok || !s) return geo.err || "找信号中…";
+  // 上千米的误差 = 没开精确位置，这个她自己能修
+  if (s.acc > 1000) return `只拿到大概位置（±${Math.round(s.acc)} 米）：去设置里打开「精确位置」`;
+  if (s.mode === "near") return "就在附近了，慢慢找";
+  if (s.mode === "sweep") return s.signal > 0 ? "就是这个方向，朝它走过去" : "再慢慢转一转，对准了会响";
+  if (s.mode === "walk") return s.signal > 0.5 ? "对，就是这个方向" : s.signal > 0 ? "差不多是这个方向" : "方向不对，停下来转一转找找";
+  if (s.canSweep) return "原地慢慢转一圈，对准礼物会响";
+  // 没有罗盘、定位又差：走起来也判断不了方向，雷达会一直安静——得告诉她为什么
+  if (s.weak) return `定位误差大（±${Math.round(s.acc)} 米），先看地图走`;
+  return "跟着金色标记走";
+}
+// 雷达每 0.1 秒回调一次，提示别跟着一起闪：变了也至少停留 0.8 秒
+let hudAt = 0;
+function setHud(t, force) {
+  const e = $("hud-hint");
+  if (e.textContent === t || (!force && Date.now() - hudAt < 800)) return;
+  e.textContent = t; hudAt = Date.now();
 }
 
 /* ---------------------------------------------------------------- 地图屏 */
@@ -182,6 +200,7 @@ async function goMap(i) {
   const st = stations[i];
   // 解锁音频必须在第一个 await 之前，之后就不算用户手势了（iOS 杀进程重开会跳过封面，这里是第一次机会）
   radar.unlock();
+  radar.requestSensors();            // 「运动与方向」授权也要用户手势，同样得在 await 之前
   keepAwake();
   document.documentElement.style.setProperty("--kc", st.color);
   show("s-map");
@@ -213,6 +232,13 @@ async function goMap(i) {
     disc = createRadarDisc($("disc"));
     // 只有真滴了才扩散，不然安静的时候盘面还在一下一下跳，像坏了
     radar.onPulse((signal) => { if (signal > 0) disc.pulse(); });
+    // 罗盘一转，地图上「我」的朝向扇形和提示就跟着变——不等下一个定位点
+    radar.onTick((s) => {
+      if (current !== "s-map") return;
+      map?.setFacing(s?.facing ?? null);
+      setHud(hudText(s));
+    });
+    radar.onPermission(() => toast(ui.sensorDenied, 9000));
   }
 
   geo.trail = [];
@@ -341,6 +367,10 @@ function goClue(i) {
   $("clue-d").textContent = st.clueBody;
   $("clue-rule").style.background = st.color;
   $("clue-btn").textContent = ui.clueButton;
+  // iOS 出发时会弹「运动与方向」授权，先打个招呼，免得她顺手点了取消
+  $("clue-fl").textContent =
+    typeof window.DeviceOrientationEvent?.requestPermission === "function" && radar.sensorPerm !== "granted"
+      ? ui.sensorHint : "";
   show("s-clue");
 }
 
