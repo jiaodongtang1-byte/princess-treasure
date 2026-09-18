@@ -70,10 +70,15 @@ const shots = {};
 
 /* ---------------------------------------------------------------- 切屏 */
 
-let current = null;
+let current = null, popping = false, swPending = false;
 function show(id) {
   document.querySelectorAll(".screen").forEach((s) => s.classList.toggle("on", s.id === id));
+  // 切屏不换 URL，手机的返回手势默认会直接退出整本书。每切一屏推一条 history，
+  // 返回时由下面的 popstate 走 BACK 表。popping 期间不推，否则自己勾自己
+  if (current && id !== current && !popping) history.pushState({ id }, "");
   current = id;
+  // 新版装好时她正在地图上走：那一次 controllerchange 已经过去，不会再有第二次。补在这儿刷
+  if (swPending && (id === "s-cover" || id === "s-clue")) location.reload();
 }
 function toast(msg, ms = 2600) {
   const t = $("toast");
@@ -539,6 +544,20 @@ $("btn-back").addEventListener("click", () => {
   goMap(state.idx);
 });
 
+/* 手机返回手势/返回键：回得去的只有这三屏。收信物和终章不给退——退回拍照屏再按一次快门，
+   刚拍的那张就被覆盖了。没有上一屏时把这条 history 推回去，人留在原地 */
+const BACK = {
+  "s-clue": () => goCover(),
+  "s-map": () => goClue(state.idx),
+  "s-capture": () => { stopQrScan(); stopCam(); $("qr-scan").hidden = true; goMap(state.idx); },
+};
+window.addEventListener("popstate", () => {
+  const to = BACK[current];
+  if (!to) { history.pushState({ id: current }, ""); return; }
+  popping = true;
+  try { to(); } finally { popping = false; }
+});
+
 $("rv-btn").addEventListener("click", () => {
   if (state.idx < stations.length) goClue(state.idx);   // finishCapture 已经把进度记到下一站
   else goFinale();
@@ -584,7 +603,9 @@ if ("serviceWorker" in navigator && location.protocol.startsWith("http")) {
      首次安装没有 controller，不刷新；刷新后 controller 不再变，不会循环。 */
   const had = !!navigator.serviceWorker.controller;
   navigator.serviceWorker.addEventListener("controllerchange", () => {
-    if (had && (current === "s-cover" || current === "s-clue")) location.reload();
+    if (!had) return;
+    swPending = true;
+    if (current === "s-cover" || current === "s-clue") location.reload();
   });
   window.addEventListener("load", () => {
     navigator.serviceWorker.register("./sw.js").catch(() => {});
